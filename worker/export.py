@@ -17,9 +17,9 @@ from pathlib import Path
 from . import config
 from .progress import emit, install
 
-SUNG = "&H0066D1FF&"  # âmbar (ASS usa BGR): #FFD166
-UNSUNG = "&H00FFF0F3&"  # quase branco com leve tom lilás
-OUTLINE = "&H00180B0A&"
+SUNG = "&H006BF5C9&"  # lima (ASS usa BGR): #C9F56B
+UNSUNG = "&H00F2FAEE&"  # quase branco esverdeado
+OUTLINE = "&H000C1107&"
 
 
 def ass_time(t: float) -> str:
@@ -116,7 +116,7 @@ def run_export(song_dir: Path, out: Path, vocal: float = 0.0, instrumental: floa
         bg = ["-loop", "1", "-framerate", "30", "-i", str(bg_png)]
         vf = f"[0:v]ass='{ass_arg}'[v]"
     else:
-        bg = ["-f", "lavfi", "-i", f"color=c=0x120d24:s={width}x{height}:r=30"]
+        bg = ["-f", "lavfi", "-i", f"color=c=0x07110c:s={width}x{height}:r=30"]
         vf = f"[0:v]ass='{ass_arg}'[v]"
 
     cmd = [ffmpeg, "-y", "-v", "error", "-progress", "pipe:1", "-nostats", *bg, "-i", str(inst), "-i", str(voc),

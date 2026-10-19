@@ -15,7 +15,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
 
 const SOURCE_LABEL: Record<string, string> = { lrclib: 'LRCLIB', whisperx: 'IA', manual: 'Manual' };
 
-const hue = (s: string) => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+const hue = (s: string) => 100 + ([...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7) % 70); // faixa de verdes
 
 interface Props {
   song: Song;
@@ -46,7 +46,7 @@ export function SongCard({ song, onReprocess, onRetry, onDelete, inQueue, onTogg
   const cover = song.has_cover ? (
     <img src={fileUrl(song.id, 'cover.jpg')} alt="" loading="lazy" />
   ) : (
-    <div className="cover-fallback" style={{ background: `linear-gradient(135deg, hsl(${h} 70% 38%), hsl(${(h + 60) % 360} 70% 22%))` }}>
+    <div className="cover-fallback" style={{ background: `linear-gradient(135deg, hsl(${h} 70% 38%), hsl(${h + 35} 70% 20%))` }}>
       {title.slice(0, 1).toUpperCase()}
     </div>
   );
