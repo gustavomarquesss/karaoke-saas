@@ -108,7 +108,7 @@ export class JobQueue extends EventEmitter {
       }
     });
     this.running.set(songId, run);
-    this.publish(this.store.update(songId, { status: 'processing', stage: 'downloading', message: 'Iniciando' }));
+    this.publish(this.store.update(songId, { status: 'processing', stage: job.onlyLyrics ? 'lyrics' : 'downloading', message: 'Iniciando' }));
     try {
       const done = await run.promise;
       const meta = done.meta as Record<string, any>;

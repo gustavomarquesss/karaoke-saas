@@ -162,7 +162,8 @@ export async function buildApp({ config, store, runner }: AppDeps): Promise<{ ap
     queue.cancel(id);
     store.delete(id);
     queue.emit('deleted', id);
-    fs.rmSync(songDir(id), { recursive: true, force: true });
+    // no Windows o processo recém-encerrado pode segurar arquivos por um instante
+    fs.rmSync(songDir(id), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     return reply.code(204).send();
   });
 

@@ -146,3 +146,13 @@ def test_split_into_lines_breaks_before_capitalized_verse_start():
     # "I" no meio da frase em inglês não quebra
     en = [w(t, i * 0.3) for i, t in enumerate("when I was young and I loved you".split())]
     assert len(split_into_lines(en)) == 1
+
+
+def test_needs_ingest_reuses_original_wav_on_force_without_input():
+    from worker.process import _needs_ingest
+
+    assert _needs_ingest(None, False, True, False)  # sem wav: precisa
+    assert not _needs_ingest(None, False, True, True)  # cache
+    assert not _needs_ingest(None, True, False, True)  # --force sem entrada: reaproveita o wav
+    assert _needs_ingest(None, True, True, True)  # --force com entrada: refaz tudo
+    assert not _needs_ingest('lyrics', True, True, False)  # --only lyrics nunca baixa

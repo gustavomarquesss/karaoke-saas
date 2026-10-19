@@ -14,3 +14,4 @@ models/
 *.log
 .DS_Store
 worker/.bin/
+.claude/

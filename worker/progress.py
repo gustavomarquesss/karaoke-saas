@@ -36,9 +36,15 @@ ProgressFn = Callable[[str, float, str], None]
 
 def stage_reporter(stage: str) -> Callable[[float, str], None]:
     lo, hi = STAGES[stage]
+    last: dict = {"p": -1.0, "m": None}
 
     def report(fraction: float, message: str = "") -> None:
         fraction = max(0.0, min(1.0, fraction))
-        emit("progress", stage=stage, progress=round(lo + (hi - lo) * fraction, 4), message=message)
+        progress = round(lo + (hi - lo) * fraction, 4)
+        # evita inundar a API: só emite se mudou a mensagem ou avançou ≥ 0,5 % (ou terminou)
+        if message == last["m"] and progress - last["p"] < 0.005 and fraction < 1.0:
+            return
+        last["p"], last["m"] = progress, message
+        emit("progress", stage=stage, progress=progress, message=message)
 
     return report

@@ -10,7 +10,7 @@
     "build": "npm run build -w @karaoke/web && npm run build -w @karaoke/api",
     "start": "npm run start -w @karaoke/api",
     "test": "npm run test -w @karaoke/api && npm run test -w @karaoke/web",
-    "test:worker": "python -m pytest worker",
+    "test:worker": "node scripts/py.mjs -m pytest worker -q",
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/setup.mjs --check"
   },

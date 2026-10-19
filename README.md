@@ -14,7 +14,10 @@ Sem login, sem nuvem, sem deploy: tudo fica em `data/`.
 - **Biblioteca** com busca, capa, duração, idioma, origem da letra, progresso em tempo real (SSE), reprocessar e excluir.
 - **Player**: letra com preenchimento palavra a palavra, contagem regressiva antes das linhas, layouts "linhas" e "rolagem", tela cheia limpa (controles somem quando ocioso), **tom (±12 semitons) sem mudar a velocidade**, **velocidade (0,5×–1,5×) sem mudar o tom**, volume do vocal guia (0–100 %) e do instrumental, ajuste fino de sincronia da letra (ms, salvo por música) e atalhos de teclado (`?` mostra todos).
 - **Editor de letra**: linha do tempo com blocos de palavras arrastáveis, edição de texto/tempos por linha e por palavra, dividir/juntar/inserir/excluir linhas, **modo toque** (aperte Enter no instante em que cada palavra começa), desfazer, Ctrl+S, e "colar letra e alinhar" (forced alignment contra o vocal).
-- **Worker independente**: `python -m worker.process <arquivo|URL> --out <pasta>`.
+- **Exportar MP4**: vídeo 720p/1080p com a letra queimada (efeito de karaokê palavra a palavra) sobre a capa desfocada, com o instrumental — opcionalmente com tom/velocidade/sincronia do player e voz guia. Usa o filtro `ass` e o `rubberband` do ffmpeg.
+- **Gravar minha voz**: botão 🎙 no player grava o microfone (cru, sem cancelamento de eco) enquanto a música toca; ao parar, você ajusta a latência da voz e os volumes, ouve a prévia e baixa/salva o **WAV com voz + instrumental** (em `data/songs/<id>/recordings/`). Use fones de ouvido.
+- **Fila de músicas**: menu `⋯` → *Adicionar à fila*; o botão **Fila** na biblioteca reordena e toca; o player avança sozinho para a próxima ao terminar.
+- **Worker independente**: `python -m worker.process <arquivo|URL> --out <pasta>` (e `python -m worker.export <pasta-da-música> --out video.mp4`).
 
 ## Pré-requisitos
 
@@ -107,6 +110,9 @@ data/      songs/<id>/ e karaoke.db   (no .gitignore)
 
 - **Fila em memória + SQLite** em vez de BullMQ/Redis: para uso pessoal Redis é peso morto. O estado durável é o SQLite; se a API cair no meio de um job, ele volta para a fila no próximo boot. A API roda o worker como processo filho e lê os eventos de progresso (JSON por linha no stdout).
 - **`node:sqlite`** (embutido no Node 22.13+) em vez de `better-sqlite3`: sem compilação nativa no Windows.
+- **Letra colada (sem tempos)**: alinhar a música inteira de uma vez com um único forced alignment deriva (medi desvios de 10+ s). Por isso o worker transcreve o vocal com o Whisper, casa a letra digitada com o que foi reconhecido (`difflib`, tolera erros de grafia/palavras extras) para obter uma janela por linha e só então refina cada linha com o aligner. Em refrões repetidos a janela pode cair na repetição errada — corrija no editor.
+- **Transcrição → linhas de karaokê**: o Whisper devolve segmentos longos; o worker reparte em pausas, pontuação e iniciais maiúsculas (cada verso começa com maiúscula na saída do Whisper) e limita o tamanho da linha.
+- **Gravação alinhada**: o microfone é capturado num AudioWorklet que carimba cada bloco com o frame do `AudioContext`, e o motor de áudio informa em que frame a música começou a sair; assim a voz casa com a música com precisão de amostra, restando só a latência física de entrada/saída (estimada pelo navegador e ajustável na revisão). O mix é refeito no navegador com a mesma engine de pitch/velocidade do player.
 - **Letra do LRCLIB é só por linha** — por isso ela é *alinhada ao vocal* com o aligner wav2vec2 do WhisperX, janela a janela, para ter tempo por palavra. Se o alinhamento de uma linha falhar, as palavras são distribuídas proporcionalmente ao tamanho. Quando o LRCLIB não acha nada, o WhisperX transcreve o vocal já separado (que rende bem mais que a mistura). Se o WhisperX falhar, cai no faster-whisper.
 - **Título/artista**: o YouTube costuma vir como "Título - Artista" ou "Artista - Título"; quando o LRCLIB acha a música, o app corrige a ordem se estiver trocada. O que você digitar ao adicionar ou editar nunca é sobrescrito.
 - **Pitch/velocidade independentes**: o player não usa `<audio>`. Os dois stems são decodificados e tocados por um `AudioWorklet` que roda o SoundTouch (um por stem, em lockstep) e só depois aplica os volumes — assim vocal guia e instrumental ficam sempre alinhados e o volume responde na hora. A posição de reprodução é integrada a partir dos frames de saída × velocidade; o teste `engine.test.ts` mede que o erro fica abaixo de ~40 ms em várias combinações de tom/velocidade.
@@ -120,11 +126,11 @@ npm test               # API (node:test) + frontend (vitest)
 npm run test:worker    # worker (pytest; use o python do venv)
 ```
 
-Cobrem: parsing de LRC e tempos por palavra, normalização da letra, endpoints da API (criação, cache por URL, busca, offset, letra, Range, exclusão), cálculo de linha atual/contagem regressiva/progresso de palavra, operações do editor e a calibração do motor de áudio.
+Cobrem: parsing de LRC, tempos por palavra, ancoragem da letra na transcrição e quebra de linhas do Whisper; endpoints da API (criação, upload, cache por URL, busca, offset, letra, Range, export, gravações, exclusão); cálculo de linha atual/contagem regressiva/progresso de palavra, operações do editor, fila, mix de gravação/WAV e a calibração do motor de áudio.
 
 ## Desempenho (referência)
 
-Música de ~5 min na RTX 3060 12 GB: separação ~1 min; letra do LRCLIB + alinhamento ~30 s; transcrição com Whisper large-v3 ~1–2 min. Em CPU conte com vários minutos por etapa; use `WHISPER_MODEL=small` (padrão em CPU) ou `base`.
+Medido numa música de 5 min (5:08) na RTX 3060 12 GB, com os modelos já baixados: **reprocessar tudo (separação + letra do LRCLIB alinhada) ≈ 37 s**; refazer só a letra ≈ 30 s (LRCLIB) ou ≈ 40 s (transcrição com Whisper large-v3); exportar MP4 720p ≈ 30 s. O primeiro processamento da vida leva ~2,5 min por causa do download dos modelos. Em CPU conte com vários minutos por etapa; use `WHISPER_MODEL=small` (padrão em CPU) ou `base`.
 
 ## Solução de problemas
 
@@ -132,6 +138,9 @@ Música de ~5 min na RTX 3060 12 GB: separação ~1 min; letra do LRCLIB + alinh
 - **`CUDA out of memory`**: defina `WHISPER_MODEL=medium` (ou `small`) e/ou `WHISPER_COMPUTE_TYPE=int8` no `.env`; feche programas que usam a GPU.
 - **"Não consegui iniciar o worker"**: o `WORKER_PYTHON` do `.env` não aponta para o venv. No Linux/macOS use `worker/.venv/bin/python`.
 - **yt-dlp falha / vídeo indisponível / HTTP 403**: o YouTube muda com frequência; atualize: `worker/.venv/Scripts/python -m pip install -U yt-dlp`. Vídeos com restrição de idade/região podem exigir cookies (não suportado aqui) — baixe o áudio por outro meio e use "Arquivo de áudio".
+- **Gravar: "Permissão do microfone negada" / nenhum microfone**: libere o microfone para `localhost` no navegador (o acesso só funciona em `localhost` ou HTTPS). Sem fones de ouvido o microfone capta a música das caixas e a mix fica com eco.
+- **Voz gravada fora de tempo**: na tela de revisão ajuste "Latência da voz" até casar (Bluetooth costuma precisar de 150–300 ms).
+- **Exportar MP4 falha**: o ffmpeg precisa ter `libass`, `libx264` e (para tom/velocidade) `rubberband`; o binário do `imageio-ffmpeg` no Windows tem tudo isso. Em Linux/macOS, se faltar algo, instale um ffmpeg completo no sistema (ele tem prioridade sobre o embutido).
 - **Letra errada ou sem letra**: no menu `⋯` do card use **Refazer letra…** e cole a letra correta (texto puro ou LRC), ou corrija no **Editor de letra**.
 - **Letra levemente adiantada/atrasada no player**: use os botões de sincronia (`,` e `.` = ±50 ms); o ajuste fica salvo para a música.
 - **Sem som / player "Carregando áudio…" para sempre**: confira se `data/songs/<id>/vocals.wav` e `instrumental.wav` existem e se o navegador permite áudio no site (clique em Play: o navegador só libera o áudio após um gesto).

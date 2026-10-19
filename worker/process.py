@@ -19,6 +19,11 @@ from . import config, progress
 from .progress import emit, stage_reporter
 
 
+def _needs_ingest(only: str | None, force: bool, has_input: bool, wav_exists: bool) -> bool:
+    """Baixa/converte só se não há original.wav, ou se --force veio com uma entrada nova."""
+    return not only and (not wav_exists or (force and has_input))
+
+
 def _norm(s: str | None) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
@@ -58,7 +63,8 @@ def main(argv: list[str] | None = None) -> int:
 
         # 1. Ingestão
         wav = out / "original.wav"
-        if not args.only and (args.force or not wav.exists()):
+        # --force sem entrada reaproveita o original.wav (só refaz separação e letra)
+        if _needs_ingest(args.only, args.force, bool(args.input), wav.exists()):
             if not args.input:
                 ap.error("informe a URL ou o arquivo de entrada")
             from .ingest import ingest
