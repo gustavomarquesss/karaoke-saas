@@ -19,6 +19,18 @@ from . import config, progress
 from .progress import emit, stage_reporter
 
 
+def _norm(s: str | None) -> str:
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+def _fix_metadata(meta: dict, match: dict) -> tuple[str, str]:
+    """Usa o título/artista do LRCLIB quando o do YouTube veio com os papéis trocados."""
+    title, artist = meta.get("title", ""), meta.get("artist", "")
+    if _norm(title) == _norm(match.get("artist")) and _norm(artist) == _norm(match.get("title")):
+        return match["title"], match["artist"]
+    return title, artist
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="worker.process", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", nargs="?", help="URL do YouTube ou caminho de um arquivo de áudio/vídeo")
@@ -85,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
                 text,
                 lambda stage, f, m: reporters[stage](f, m),
             )
-            result.setdefault("offset_ms", 0)
+            match = result.pop("match", None)
+            if match and match.get("title"):
+                meta["title"], meta["artist"] = _fix_metadata(meta, match)
             lyrics_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             meta["language"] = result["language"]
             meta["lyrics_source"] = result["source"]

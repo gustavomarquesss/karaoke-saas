@@ -81,8 +81,6 @@ def ingest(source: str, out_dir: Path, on_progress: Callable[[float, str], None]
         audio = next(p for p in work.iterdir() if p.stem == "source" and p.suffix not in (".jpg", ".png", ".webp"))
         thumb = next((p for p in work.iterdir() if p.suffix == ".jpg"), None)
         artist, title = split_artist_title(meta["raw_title"], meta["uploader"])
-        if meta.get("artist_hint"):
-            artist = meta["artist_hint"]
     else:
         audio = Path(source)
         if not audio.exists():

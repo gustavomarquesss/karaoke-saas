@@ -61,3 +61,13 @@ def test_normalize_monotonic():
     ]
     normalize_monotonic(lines)
     assert lines[1]["words"][0]["start"] == 2
+
+
+def test_fix_metadata_swaps_when_youtube_order_is_title_artist():
+    from worker.process import _fix_metadata
+
+    meta = {"title": "Legião Urbana", "artist": "Pais e Filhos"}
+    match = {"title": "Pais e Filhos", "artist": "Legião Urbana"}
+    assert _fix_metadata(meta, match) == ("Pais e Filhos", "Legião Urbana")
+    # nomes que já batem permanecem
+    assert _fix_metadata({"title": "X", "artist": "Y"}, {"title": "Z", "artist": "W"}) == ("X", "Y")

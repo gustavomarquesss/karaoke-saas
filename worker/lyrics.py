@@ -34,7 +34,7 @@ def _http_json(url: str, timeout: float = 15.0) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def fetch_lrclib(title: str, artist: str, duration: float | None) -> dict | None:
+def fetch_lrclib(title: str, artist: str, duration: float | None, swapped: bool = False) -> dict | None:
     """Busca letra sincronizada. Devolve o registro do LRCLIB ou None."""
     if not title:
         return None
@@ -54,6 +54,9 @@ def fetch_lrclib(title: str, artist: str, duration: float | None) -> dict | None
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ConnectionError) as exc:
             log(f"LRCLIB /search falhou: {exc}")
     synced = [c for c in candidates if c.get("syncedLyrics")]
+    if not synced and artist and not swapped:
+        # "Título - Artista" é comum no YouTube; tenta com os papéis trocados.
+        return fetch_lrclib(artist, title, duration, swapped=True)
     if not synced:
         return None
     if duration:  # prefere a versão com duração mais próxima; descarta as muito diferentes
@@ -254,7 +257,12 @@ def build_lyrics(
         lyr(0.6, "Letra sincronizada encontrada")
         language = detect_language(audio, device)
         lines = lrc.lines_from_lrc(lrc.parse_lrc(record["syncedLyrics"]), duration)
-        return {"language": language, "source": "lrclib", "lines": align_lines(lines, audio, language, device, ali)}
+        return {
+            "language": language,
+            "source": "lrclib",
+            "lines": align_lines(lines, audio, language, device, ali),
+            "match": {"title": record.get("trackName"), "artist": record.get("artistName")},
+        }
 
     lyr(0.8, "Sem letra no LRCLIB; transcrevendo")
     lines, language = transcribe(audio, device, ali)
