@@ -613,8 +613,9 @@ kbd {
 }
 .player-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 12px clamp(12px, 3vw, 32px);
   transition: opacity 0.4s;
 }
@@ -622,7 +623,7 @@ kbd {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 220px;
   text-align: center;
 }
 .player-title strong {
