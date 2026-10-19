@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
 
-export type Route = { name: 'library' } | { name: 'play'; id: string } | { name: 'edit'; id: string };
+export type Route = { name: 'library' } | { name: 'play'; id: string; autoplay: boolean } | { name: 'edit'; id: string };
 
 export function parseHash(hash: string): Route {
-  const [, kind, id] = hash.replace(/^#/, '').split('/');
-  if (kind === 'play' && id) return { name: 'play', id };
+  const [, kind, id, flag] = hash.replace(/^#/, '').split('/');
+  if (kind === 'play' && id) return { name: 'play', id, autoplay: flag === 'auto' };
   if (kind === 'edit' && id) return { name: 'edit', id };
   return { name: 'library' };
 }
 
 export const hrefs = {
   library: '#/',
-  play: (id: string) => `#/play/${id}`,
+  /** `autoplay` começa a tocar sozinho (usado ao avançar na fila). */
+  play: (id: string, autoplay = false) => `#/play/${id}${autoplay ? '/auto' : ''}`,
   edit: (id: string) => `#/edit/${id}`,
 };
 

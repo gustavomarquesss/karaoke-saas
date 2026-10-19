@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, fileUrl } from '../api';
 import { LyricLine, paintLine } from '../components/LyricLine';
 import { KaraokePlayer } from '../audio/player';
+import { VoiceRecorder } from '../audio/recorder';
+import { ExportDialog } from '../components/ExportDialog';
+import { RecordingDialog, type TakeData } from '../components/RecordingDialog';
+import { useQueue } from '../hooks/useQueue';
+import { nextInQueue } from '../lib/queue';
 import { hrefs } from '../hooks/useRoute';
 import { displayState, formatTime, lyricTime, type DisplayState } from '../lib/lyrics';
 import { clamp, loadLayout, loadSettings, saveLayout, saveSettings, type LyricLayout, type PlayerSettings } from '../lib/settings';
@@ -22,7 +27,7 @@ const SHORTCUTS: [string, string][] = [
 
 const sameState = (a: DisplayState, b: DisplayState) => a.current === b.current && a.next === b.next && a.active === b.active && (a.countdown === null) === (b.countdown === null) && (a.countdown === null || Math.ceil(a.countdown) === Math.ceil(b.countdown!));
 
-export function Player({ id }: { id: string }) {
+export function Player({ id, autoplay = false }: { id: string; autoplay?: boolean }) {
   const [song, setSong] = useState<Song | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [hasLyrics, setHasLyrics] = useState(true);
@@ -38,6 +43,18 @@ export function Player({ id }: { id: string }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [idle, setIdle] = useState(false);
   const [help, setHelp] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [recState, setRecState] = useState<'idle' | 'starting' | 'recording'>('idle');
+  const [take, setTake] = useState<TakeData | null>(null);
+  const [recError, setRecError] = useState<string | null>(null);
+  const { queue } = useQueue();
+  const nextId = nextInQueue(queue, id);
+  const nextIdRef = useRef(nextId);
+  nextIdRef.current = nextId;
+  const recorder = useRef<VoiceRecorder | null>(null);
+  const recStart = useRef(0);
+  const recStateRef = useRef(recState);
+  recStateRef.current = recState;
 
   const player = useRef<KaraokePlayer | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -81,7 +98,12 @@ export function Player({ id }: { id: string }) {
         p.setVocalVolume(st.vocal);
         p.setInstrumentalVolume(st.instrumental);
         p.onPlayingChange = setPlaying;
-        p.onEnded = () => setPlaying(false);
+        p.onEnded = () => {
+          setPlaying(false);
+          if (recStateRef.current === 'recording') void finishRecording();
+          else if (nextIdRef.current) window.setTimeout(() => (location.hash = hrefs.play(nextIdRef.current!, true)), 1500);
+        };
+        if (autoplay) void p.play().catch(() => {});
         setDuration(p.duration);
         setPhase('ready');
       } catch (e) {
@@ -145,6 +167,7 @@ export function Player({ id }: { id: string }) {
   const togglePlay = useCallback(() => {
     const p = player.current;
     if (!p) return;
+    if (recStateRef.current === 'recording') return void finishRecording();
     if (p.isPlaying) p.pause();
     else {
       if (p.currentTime >= p.duration - 0.1) p.seek(0);
@@ -154,12 +177,13 @@ export function Player({ id }: { id: string }) {
 
   const seekBy = useCallback((delta: number) => {
     const p = player.current;
-    if (!p) return;
+    if (!p || recStateRef.current !== 'idle') return;
     p.seek(p.currentTime + delta);
     setTime(p.currentTime);
   }, []);
 
   const seekTo = useCallback((t: number) => {
+    if (recStateRef.current !== 'idle') return;
     player.current?.seek(t);
     setTime(t);
   }, []);
@@ -216,6 +240,56 @@ export function Player({ id }: { id: string }) {
       update({ vocal: 0 });
     } else update({ vocal: mutedVocal.current || 0.25 });
   }, [update]);
+
+  // ---------------------------------------------------------------- gravação da voz
+  const startRecording = useCallback(async () => {
+    const p = player.current;
+    if (!p || recStateRef.current !== 'idle') return;
+    setRecError(null);
+    setRecState('starting');
+    try {
+      const rec = await VoiceRecorder.create(p.audioContext);
+      recorder.current = rec;
+      p.pause();
+      p.seek(0);
+      const started = new Promise<number>((resolve) => {
+        p.onStarted = (frame) => resolve(frame);
+      });
+      await p.play();
+      recStart.current = await started;
+      p.onStarted = undefined;
+      setRecState('recording');
+    } catch (e) {
+      recorder.current?.dispose();
+      recorder.current = null;
+      setRecError((e as Error).message);
+      setRecState('idle');
+    }
+  }, []);
+
+  const finishRecording = useCallback(async () => {
+    const p = player.current;
+    const rec = recorder.current;
+    if (!p || !rec || recStateRef.current !== 'recording') return;
+    recorder.current = null;
+    recStateRef.current = 'idle';
+    if (p.isPlaying) {
+      await new Promise<void>((resolve) => {
+        const fallback = window.setTimeout(resolve, 800);
+        p.onStopped = () => {
+          window.clearTimeout(fallback);
+          resolve();
+        };
+        p.pause();
+      });
+      p.onStopped = undefined;
+    }
+    const t = rec.stop();
+    setRecState('idle');
+    setTake({ ...t, startFrame: recStart.current, stopFrame: p.lastStopFrame, sampleRate: p.sampleRate, outputLatency: (p.audioContext.outputLatency || 0) + p.audioContext.baseLatency });
+  }, []);
+
+  useEffect(() => () => recorder.current?.dispose(), []);
 
   // fullscreen e ociosidade (esconde controles/cursor)
   useEffect(() => {
@@ -352,6 +426,22 @@ export function Player({ id }: { id: string }) {
           <span>{song?.artist}</span>
         </div>
         <div className="player-top-actions">
+          {nextId && (
+            <a className="btn ghost" href={hrefs.play(nextId, true)} title="Próxima música da fila">
+              Próxima ⏭
+            </a>
+          )}
+          <button
+            className={`btn ghost ${recState === 'recording' ? 'rec' : ''}`}
+            onClick={() => (recState === 'recording' ? void finishRecording() : void startRecording())}
+            disabled={phase !== 'ready' || recState === 'starting'}
+            title="Grava sua voz cantando junto (use fones de ouvido) e salva a mix"
+          >
+            {recState === 'recording' ? '■ Parar gravação' : recState === 'starting' ? 'Abrindo microfone…' : '🎙 Gravar'}
+          </button>
+          <button className="btn ghost" onClick={() => setExporting(true)} disabled={phase !== 'ready' || !hasLyrics} title="Gera um MP4 com a letra queimada">
+            Exportar MP4
+          </button>
           <button className="btn ghost" onClick={cycleLayout} title="Alternar layout (L)">
             {layout === 'karaoke' ? 'Layout: linhas' : 'Layout: rolagem'}
           </button>
@@ -367,6 +457,11 @@ export function Player({ id }: { id: string }) {
         </div>
       </header>
 
+      {recError && (
+        <div className="banner error rec-error" role="alert" onClick={() => setRecError(null)}>
+          {recError}
+        </div>
+      )}
       <div className={`stage layout-${layout}`} ref={stage} onDoubleClick={toggleFullscreen}>
         {phase === 'loading' && (
           <div className="stage-msg">
@@ -453,6 +548,9 @@ export function Player({ id }: { id: string }) {
           </Control>
         </div>
       </footer>
+
+      {exporting && song && <ExportDialog song={song} settings={settings} onClose={() => setExporting(false)} />}
+      {take && song && <RecordingDialog song={song} take={take} settings={settings} onClose={() => setTake(null)} />}
 
       {help && (
         <div className="overlay" onMouseDown={() => setHelp(false)}>

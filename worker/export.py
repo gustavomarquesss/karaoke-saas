@@ -95,20 +95,26 @@ def run_export(song_dir: Path, out: Path, vocal: float = 0.0, instrumental: floa
 
     cover = song_dir / "cover.jpg"
     inst, voc = song_dir / "instrumental.wav", song_dir / "vocals.wav"
-    duration = max(float(lyrics["lines"][-1]["end"]) if lyrics.get("lines") else 0.0, 1.0)
+    import soundfile as sf
+
+    duration = max(sf.info(str(inst)).duration, 1.0)
 
     # filtro de áudio: mistura (volumes) → rubberband (tom/velocidade)
     afilters = []
-    mix = f"[1:a]volume={instrumental}[i];[2:a]volume={vocal}[v];[i][v]amix=inputs=2:duration=longest:normalize=0"
+    mix = f"[1:a]volume={instrumental}[ia];[2:a]volume={vocal}[va];[ia][va]amix=inputs=2:duration=longest:normalize=0"
     if semitones or abs(tempo - 1) > 1e-3:
         mix += f",rubberband=pitch={2 ** (semitones / 12):.6f}:tempo={tempo:.4f}"
     afilters.append(mix + "[a]")
 
     ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
+    bg_png = out.with_suffix(".bg.png")
     if cover.exists():
-        bg = ["-loop", "1", "-framerate", "30", "-i", str(cover)]
-        vf = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
-              f"boxblur=24:4,eq=brightness=-0.32:saturation=0.9,ass='{ass_arg}'[v]")
+        # o fundo (capa desfocada) é renderizado UMA vez; depois o ffmpeg só repete a imagem
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(cover), "-frames:v", "1", "-vf",
+                        f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
+                        "boxblur=24:4,eq=brightness=-0.32:saturation=0.9", str(bg_png)], check=True)
+        bg = ["-loop", "1", "-framerate", "30", "-i", str(bg_png)]
+        vf = f"[0:v]ass='{ass_arg}'[v]"
     else:
         bg = ["-f", "lavfi", "-i", f"color=c=0x120d24:s={width}x{height}:r=30"]
         vf = f"[0:v]ass='{ass_arg}'[v]"
@@ -129,6 +135,7 @@ def run_export(song_dir: Path, out: Path, vocal: float = 0.0, instrumental: floa
     if proc.wait() != 0:
         raise RuntimeError(f"ffmpeg falhou: {err.strip()[-600:]}")
     ass_path.unlink(missing_ok=True)
+    bg_png.unlink(missing_ok=True)
     return out
 
 

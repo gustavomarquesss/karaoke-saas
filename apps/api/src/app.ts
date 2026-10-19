@@ -183,6 +183,85 @@ export async function buildApp({ config, store, runner }: AppDeps): Promise<{ ap
     return lyrics;
   });
 
+  // ---------------------------------------------------------------- export MP4
+  let exporting = false;
+  const exportSchema = z.object({
+    vocal: z.number().min(0).max(1).default(0),
+    instrumental: z.number().min(0).max(1).default(1),
+    semitones: z.number().int().min(-12).max(12).default(0),
+    tempo: z.number().min(0.5).max(1.5).default(1),
+    size: z.enum(['1280x720', '1920x1080']).default('1280x720'),
+  });
+
+  app.post('/api/songs/:id/export', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const song = store.get(id);
+    if (!song) return reply.code(404).send({ error: 'Música não encontrada' });
+    if (song.status !== 'ready' || !fs.existsSync(lyricsFile(id))) return reply.code(409).send({ error: 'A música precisa estar pronta e ter letra para exportar' });
+    if (exporting) return reply.code(409).send({ error: 'Já há uma exportação em andamento' });
+    const o = exportSchema.parse(req.body ?? {});
+    const safe = (song.title || 'karaoke').replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'karaoke';
+    const name = `${safe}_${Date.now()}.mp4`;
+    const out = path.join(songDir(id), 'exports', name);
+    exporting = true;
+    try {
+      await runner.run(
+        [songDir(id), '--out', out, '--vocal', String(o.vocal), '--instrumental', String(o.instrumental), '--semitones', String(o.semitones),
+         '--tempo', String(o.tempo), '--offset-ms', String(song.offset_ms), '--size', o.size, '--title', [song.artist, song.title].filter(Boolean).join(' — ')],
+        () => {},
+        'worker.export',
+      ).promise;
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      exporting = false;
+    }
+    return { name, url: `/files/${id}/exports/${encodeURIComponent(name)}` };
+  });
+
+  app.get('/api/songs/:id/exports', async (req) => {
+    const dir = path.join(songDir((req.params as { id: string }).id), 'exports');
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.mp4'))
+      .map((f) => ({ name: f, url: `/files/${(req.params as { id: string }).id}/exports/${encodeURIComponent(f)}`, size: fs.statSync(path.join(dir, f)).size }));
+  });
+
+  // ---------------------------------------------------------------- gravações (voz + instrumental)
+  app.addContentTypeParser(['audio/wav', 'audio/x-wav'], { parseAs: 'buffer', bodyLimit: 400 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+
+  const recordingsDir = (id: string) => path.join(songDir(id), 'recordings');
+  const listRecordings = (id: string) =>
+    fs.existsSync(recordingsDir(id))
+      ? fs
+          .readdirSync(recordingsDir(id))
+          .filter((f) => f.endsWith('.wav'))
+          .sort()
+          .reverse()
+          .map((f) => ({ name: f, url: `/files/${id}/recordings/${encodeURIComponent(f)}`, size: fs.statSync(path.join(recordingsDir(id), f)).size }))
+      : [];
+
+  app.post('/api/songs/:id/recordings', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!store.get(id)) return reply.code(404).send({ error: 'Música não encontrada' });
+    if (!Buffer.isBuffer(req.body) || req.body.length < 44) return reply.code(400).send({ error: 'Envie o WAV no corpo (Content-Type: audio/wav)' });
+    const name = `take-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`;
+    fs.mkdirSync(recordingsDir(id), { recursive: true });
+    fs.writeFileSync(path.join(recordingsDir(id), name), req.body);
+    return reply.code(201).send(listRecordings(id).find((r) => r.name === name));
+  });
+
+  app.get('/api/songs/:id/recordings', async (req) => listRecordings((req.params as { id: string }).id));
+
+  app.delete('/api/songs/:id/recordings/:name', async (req, reply) => {
+    const { id, name } = req.params as { id: string; name: string };
+    const file = path.join(recordingsDir(id), path.basename(name));
+    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Gravação não encontrada' });
+    fs.rmSync(file);
+    return reply.code(204).send();
+  });
+
   // ---------------------------------------------------------------- áudio por stem (alias para /files)
   app.get('/api/songs/:id/audio/:stem', async (req, reply) => {
     const { id, stem } = req.params as { id: string; stem: string };

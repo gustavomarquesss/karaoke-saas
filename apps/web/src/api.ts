@@ -38,7 +38,19 @@ export const api = {
   remove: (id: string) => request<void>(`/api/songs/${id}`, { method: 'DELETE' }),
   reprocess: (id: string, mode: 'all' | 'lyrics', lyrics?: string) => request<Song>(`/api/songs/${id}/reprocess`, json('POST', { mode, lyrics })),
   lyrics: (id: string) => request<Lyrics>(`/api/songs/${id}/lyrics`),
+  exportVideo: (id: string, o: ExportOptions) => request<{ name: string; url: string }>(`/api/songs/${id}/export`, json('POST', o)),
+  exports: (id: string) => request<{ name: string; url: string; size: number }[]>(`/api/songs/${id}/exports`),
+  saveRecording: (id: string, wav: Blob) => request<{ name: string; url: string; size: number }>(`/api/songs/${id}/recordings`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav }),
+  recordings: (id: string) => request<{ name: string; url: string; size: number }[]>(`/api/songs/${id}/recordings`),
   saveLyrics: (id: string, lyrics: Lyrics) => request<Lyrics>(`/api/songs/${id}/lyrics`, json('PUT', lyrics)),
 };
+
+export interface ExportOptions {
+  vocal: number;
+  instrumental: number;
+  semitones: number;
+  tempo: number;
+  size: '1280x720' | '1920x1080';
+}
 
 export const fileUrl = (id: string, name: 'vocals.wav' | 'instrumental.wav' | 'cover.jpg') => `/files/${id}/${name}`;

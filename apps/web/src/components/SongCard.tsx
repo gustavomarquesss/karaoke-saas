@@ -22,9 +22,11 @@ interface Props {
   onReprocess: (mode: 'all' | 'lyrics') => void;
   onRetry: () => void;
   onDelete: () => void;
+  inQueue: boolean;
+  onToggleQueue: () => void;
 }
 
-export function SongCard({ song, onReprocess, onRetry, onDelete }: Props) {
+export function SongCard({ song, onReprocess, onRetry, onDelete, inQueue, onToggleQueue }: Props) {
   const ready = song.status === 'ready';
   const busy = song.status === 'queued' || song.status === 'processing';
   const [menu, setMenu] = useState(false);
@@ -99,6 +101,9 @@ export function SongCard({ song, onReprocess, onRetry, onDelete }: Props) {
           <div className="menu" role="menu">
             {ready && (
               <>
+                <button role="menuitem" onClick={() => (setMenu(false), onToggleQueue())}>
+                  {inQueue ? 'Remover da fila' : 'Adicionar à fila'}
+                </button>
                 <a role="menuitem" href={hrefs.edit(song.id)}>
                   Editar letra
                 </a>

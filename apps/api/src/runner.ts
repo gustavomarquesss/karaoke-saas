@@ -14,14 +14,15 @@ export interface WorkerRun {
 }
 
 export interface WorkerRunner {
-  run(args: string[], onEvent: (e: WorkerEvent) => void): WorkerRun;
+  /** `module` é o módulo Python do worker (padrão: processamento; `worker.export` gera o MP4). */
+  run(args: string[], onEvent: (e: WorkerEvent) => void, module?: 'worker.process' | 'worker.export'): WorkerRun;
 }
 
 /** Executa `python -m worker.process ...` e traduz o stdout (JSON por linha) em eventos. */
 export function pythonRunner(python: string, cwd: string): WorkerRunner {
   return {
-    run(args, onEvent) {
-      const child: ChildProcess = spawn(python, ['-u', '-m', 'worker.process', ...args], {
+    run(args, onEvent, module = 'worker.process') {
+      const child: ChildProcess = spawn(python, ['-u', '-m', module, ...args], {
         cwd,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],

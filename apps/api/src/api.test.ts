@@ -12,8 +12,16 @@ import { normalizeSourceUrl } from './url.js';
 
 /** Runner falso: simula o worker escrevendo os arquivos e emitindo progresso. */
 const fakeRunner: WorkerRunner = {
-  run(args, onEvent) {
+  run(args, onEvent, module) {
     const out = args[args.indexOf('--out') + 1];
+    if (module === 'worker.export') {
+      const exported = (async () => {
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, 'MP4');
+        return { event: 'done' as const, seconds: 0, out, meta: {} };
+      })();
+      return { promise: exported, kill() {} };
+    }
     const promise = (async () => {
       fs.mkdirSync(out, { recursive: true });
       onEvent({ event: 'progress', stage: 'separating', progress: 0.3, message: 'x' });
@@ -154,6 +162,34 @@ describe('API', () => {
     assert.equal(again.json().id, first.json().id);
     const noFile = await app.inject({ method: 'POST', url: '/api/songs/upload', headers, payload: Buffer.from('--' + boundary + '--' + CRLF) });
     assert.equal(noFile.statusCode, 400);
+  });
+
+  it('exporta MP4 com os parâmetros validados e lista os arquivos', async () => {
+    const [song] = (await app.inject({ method: 'GET', url: '/api/songs' })).json();
+    const bad = await app.inject({ method: 'POST', url: `/api/songs/${song.id}/export`, payload: { semitones: 99 } });
+    assert.equal(bad.statusCode, 400);
+    const ok = await app.inject({ method: 'POST', url: `/api/songs/${song.id}/export`, payload: { vocal: 0.2, semitones: -2 } });
+    assert.equal(ok.statusCode, 200);
+    assert.match(ok.json().name, /.mp4$/);
+    const listed = (await app.inject({ method: 'GET', url: `/api/songs/${song.id}/exports` })).json();
+    assert.equal(listed.length, 1);
+    const file = await app.inject({ method: 'GET', url: ok.json().url });
+    assert.equal(file.statusCode, 200);
+  });
+
+  it('salva, lista e apaga gravações', async () => {
+    const [song] = (await app.inject({ method: 'GET', url: '/api/songs' })).json();
+    const wav = Buffer.alloc(100, 1);
+    const up = await app.inject({ method: 'POST', url: `/api/songs/${song.id}/recordings`, headers: { 'content-type': 'audio/wav' }, payload: wav });
+    assert.equal(up.statusCode, 201);
+    assert.equal(up.json().size, 100);
+    const list = (await app.inject({ method: 'GET', url: `/api/songs/${song.id}/recordings` })).json();
+    assert.equal(list.length, 1);
+    assert.equal((await app.inject({ method: 'GET', url: list[0].url })).statusCode, 200);
+    const tiny = await app.inject({ method: 'POST', url: `/api/songs/${song.id}/recordings`, headers: { 'content-type': 'audio/wav' }, payload: Buffer.alloc(3) });
+    assert.equal(tiny.statusCode, 400);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/songs/${song.id}/recordings/${encodeURIComponent(list[0].name)}` })).statusCode, 204);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/songs/${song.id}/recordings` })).json().length, 0);
   });
 
   it('exclui música e arquivos', async () => {

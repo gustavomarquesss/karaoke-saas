@@ -3,6 +3,7 @@ import { KaraokeEngine } from './engine';
 
 declare const sampleRate: number;
 declare const currentTime: number;
+declare const currentFrame: number;
 declare class AudioWorkletProcessor {
   readonly port: MessagePort;
   constructor();
@@ -23,6 +24,7 @@ class KaraokeProcessor extends AudioWorkletProcessor {
   private pending: Params = {};
   private blocks = 0;
   private wasPlaying = false;
+  private announce = false;
 
   constructor() {
     super();
@@ -44,6 +46,7 @@ class KaraokeProcessor extends AudioWorkletProcessor {
       }
       case 'play':
         if (this.engine) this.engine.playing = true;
+        this.announce = true;
         break;
       case 'pause':
         if (this.engine) this.engine.playing = false;
@@ -59,12 +62,17 @@ class KaraokeProcessor extends AudioWorkletProcessor {
     const engine = this.engine;
     if (!engine || out.length === 0) return true;
     const n = out[0].length;
+    if (engine.playing && this.announce) {
+      // marca o frame do AudioContext em que esta posição da música começa a sair (alinha a gravação)
+      this.announce = false;
+      this.port.postMessage({ type: 'started', frame: currentFrame, media: engine.positionFrames });
+    }
     engine.render(out[0], out[1] ?? out[0], n);
     this.blocks++;
     const playing = engine.playing;
     // a cada 12 blocos de 128 frames (~35 ms) ou quando o estado muda
     if (this.blocks % 12 === 0 || playing !== this.wasPlaying) {
-      this.port.postMessage({ type: 'pos', frame: engine.positionFrames, at: currentTime, playing });
+      this.port.postMessage({ type: 'pos', frame: engine.positionFrames, at: currentTime, cf: currentFrame, playing });
     }
     if (engine.ended && this.wasPlaying) this.port.postMessage({ type: 'ended' });
     this.wasPlaying = playing;

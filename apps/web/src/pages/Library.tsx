@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { AddSongDialog } from '../components/AddSongDialog';
 import { LyricsDialog } from '../components/LyricsDialog';
+import { QueuePanel } from '../components/QueuePanel';
 import { SongCard } from '../components/SongCard';
 import { api } from '../api';
+import { useQueue } from '../hooks/useQueue';
 import { useSongs } from '../hooks/useSongs';
 import { hrefs } from '../hooks/useRoute';
 import type { Song } from '../types';
@@ -11,6 +13,8 @@ export function Library() {
   const { songs, error, refresh } = useSongs();
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
+  const queue = useQueue();
   const [relyrics, setRelyrics] = useState<Song | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -54,6 +58,9 @@ export function Library() {
             aria-label="Buscar músicas"
           />
         </div>
+        <button className="btn" onClick={() => setShowQueue(true)}>
+          Fila{queue.queue.length ? ` (${queue.queue.length})` : ''}
+        </button>
         <button className="btn primary" onClick={() => setAdding(true)}>
           + Adicionar música
         </button>
@@ -93,11 +100,14 @@ export function Library() {
               }}
               onRetry={() => run(() => api.reprocess(song.id, 'all'))}
               onDelete={() => onDelete(song)}
+              inQueue={queue.queue.includes(song.id)}
+              onToggleQueue={() => (queue.queue.includes(song.id) ? queue.remove(song.id) : queue.add(song.id))}
             />
           ))}
         </div>
       </main>
 
+      {showQueue && <QueuePanel songs={songs ?? []} onClose={() => setShowQueue(false)} />}
       {adding && (
         <AddSongDialog
           onClose={() => setAdding(false)}

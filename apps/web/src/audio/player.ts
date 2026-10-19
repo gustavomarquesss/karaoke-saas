@@ -18,6 +18,13 @@ export class KaraokePlayer {
   duration = 0;
   onEnded?: () => void;
   onPlayingChange?: (playing: boolean) => void;
+  /** a música começou a sair no frame `frame` do AudioContext (posição `media` em frames) */
+  onStarted?: (frame: number, media: number) => void;
+  /** a reprodução parou (pausa ou fim) no frame `frame` do AudioContext */
+  onStopped?: (frame: number) => void;
+  readonly sampleRate = SAMPLE_RATE;
+  /** frame do AudioContext da última parada */
+  lastStopFrame = 0;
 
   private constructor(
     private ctx: AudioContext,
@@ -32,6 +39,12 @@ export class KaraokePlayer {
           this.playing = m.playing;
           this.onPlayingChange?.(m.playing);
         }
+        if (!m.playing && m.cf !== undefined) {
+          this.lastStopFrame = m.cf;
+          this.onStopped?.(m.cf);
+        }
+      } else if (m.type === 'started') {
+        this.onStarted?.(m.frame, m.media);
       } else if (m.type === 'ended') {
         this.onEnded?.();
       }
@@ -133,7 +146,7 @@ export class KaraokePlayer {
   }
 }
 
-async function decode(ctx: AudioContext, url: string, signal?: AbortSignal): Promise<Stem> {
+export async function decode(ctx: AudioContext, url: string, signal?: AbortSignal): Promise<Stem> {
   const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Falha ao baixar ${url} (${res.status})`);
   const buf = await ctx.decodeAudioData(await res.arrayBuffer());

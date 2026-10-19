@@ -7,7 +7,7 @@ export function App() {
   const route = useRoute();
   switch (route.name) {
     case 'play':
-      return <Player key={route.id} id={route.id} />;
+      return <Player key={route.id} id={route.id} autoplay={route.autoplay} />;
     case 'edit':
       return <Editor key={route.id} id={route.id} />;
     default:

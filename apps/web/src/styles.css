@@ -1092,6 +1092,103 @@ kbd {
   font-weight: 700;
 }
 
+/* ------------------------------------------------------------ extras: gravação, exportação, fila */
+.btn.rec {
+  color: #fff;
+  background: #c0264b;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 107, 129, 0.25);
+  }
+}
+.rec-error {
+  margin: 0 clamp(12px, 3vw, 32px);
+  cursor: pointer;
+}
+.banner.ok {
+  border-color: rgba(85, 224, 162, 0.5);
+  background: rgba(85, 224, 162, 0.1);
+  color: #a9f0cf;
+}
+.small-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.form label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 500;
+}
+.mini-title {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.file-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+.file-list a {
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.audio-preview {
+  width: 100%;
+}
+.stage-msg.small {
+  flex-direction: row;
+  margin: 0;
+  justify-content: center;
+}
+.btn.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.queue-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.queue-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+.queue-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.queue-title strong,
+.queue-title span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 720px) {
   .topbar {
     flex-wrap: wrap;
