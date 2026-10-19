@@ -3,6 +3,7 @@ import readline from 'node:readline';
 
 export type WorkerEvent =
   | { event: 'info'; device: string }
+  | { event: 'meta'; title?: string; artist?: string; duration?: number; has_cover?: boolean }
   | { event: 'progress'; stage: string; progress: number; message?: string }
   | { event: 'done'; seconds: number; meta: Record<string, unknown>; out: string }
   | { event: 'error'; message: string };
@@ -55,7 +56,17 @@ export function pythonRunner(python: string, cwd: string): WorkerRunner {
           reject(new Error(lastError ?? `Worker saiu com código ${code}\n${stderrTail.slice(-8).join('\n')}`));
         });
       });
-      return { promise, kill: () => child.kill() };
+      return { promise, kill: () => killTree(child) };
     },
   };
+}
+
+/** No Windows o python do venv é um "launcher" que cria o processo real: precisa matar a árvore. */
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined || child.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  } else {
+    child.kill('SIGTERM');
+  }
 }

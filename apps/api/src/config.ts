@@ -19,7 +19,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const dataDir = resolveFromRoot(env.DATA_DIR || './data');
   const defaultPython = process.platform === 'win32' ? 'worker/.venv/Scripts/python.exe' : 'worker/.venv/bin/python';
   return {
-    port: Number(env.PORT || 3001),
+    port: Number(env.API_PORT || 3001),
     dataDir,
     songsDir: path.join(dataDir, 'songs'),
     workerPython: resolveFromRoot(env.WORKER_PYTHON || defaultPython),

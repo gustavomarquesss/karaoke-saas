@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             from .ingest import ingest
 
             meta.update(ingest(args.input, out, stage_reporter("downloading")))
+            emit("meta", **{k: meta.get(k) for k in ("title", "artist", "duration", "has_cover")})
         if args.title:
             meta["title"] = args.title
         if args.artist is not None:

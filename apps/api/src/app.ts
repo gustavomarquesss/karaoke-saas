@@ -78,7 +78,7 @@ export async function buildApp({ config, store, runner }: AppDeps): Promise<{ ap
     const key = normalizeSourceUrl(body.url);
     const existing = store.getByKey(key);
     if (existing) return reply.code(200).send({ ...toView(existing), duplicate: true });
-    const song = store.insert({ id: newId(), source_key: key, source_url: body.url, title: body.title ?? '', artist: body.artist ?? '' });
+    const song = store.insert({ id: newId(), source_key: key, source_url: body.url, title: body.title ?? '', artist: body.artist ?? '', title_locked: body.title ? 1 : 0 });
     startJob(song.id, { input: body.url, ...body });
     return reply.code(201).send(toView(store.get(song.id)!));
   });
@@ -113,7 +113,7 @@ export async function buildApp({ config, store, runner }: AppDeps): Promise<{ ap
       return reply.code(200).send({ ...toView(existing), duplicate: true });
     }
     const title = fields.title || fields.filename || '';
-    const song = store.insert({ id, source_key: key, source_url: null, title, artist: fields.artist ?? '' });
+    const song = store.insert({ id, source_key: key, source_url: null, title, artist: fields.artist ?? '', title_locked: fields.title ? 1 : 0 });
     startJob(id, { input: saved, title: fields.title, artist: fields.artist, lyrics: fields.lyrics });
     return reply.code(201).send(toView(store.get(song.id)!));
   });
@@ -125,7 +125,8 @@ export async function buildApp({ config, store, runner }: AppDeps): Promise<{ ap
     const body = z
       .object({ title: z.string().optional(), artist: z.string().optional(), offset_ms: z.number().int().min(-30000).max(30000).optional() })
       .parse(req.body);
-    const song = store.update(id, body)!;
+    const edited = body.title !== undefined || body.artist !== undefined;
+    const song = store.update(id, { ...body, ...(edited ? { title_locked: 1 } : {}) })!;
     queue.emit('song', song);
     return toView(song);
   });

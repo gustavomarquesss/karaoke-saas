@@ -735,16 +735,16 @@ kbd {
   position: absolute;
   inset: 0;
   color: var(--sung);
-  text-shadow: 0 0 22px rgba(255, 95, 168, 0.55), 0 2px 18px rgba(0, 0, 0, 0.5);
-  clip-path: inset(0 100% 0 0);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+  clip-path: inset(-0.2em 100% -0.2em -0.1em);
   pointer-events: none;
   white-space: pre;
 }
 .line.past .w-fill {
-  clip-path: inset(0 0 0 0);
+  clip-path: none;
 }
 .line.current .w-fill {
-  clip-path: inset(0 calc(100% - var(--p) * 100%) 0 0);
+  clip-path: inset(-0.2em calc(100% - var(--p) * 100%) -0.2em -0.1em);
 }
 .line.next .w-base,
 .line.future .w-base {

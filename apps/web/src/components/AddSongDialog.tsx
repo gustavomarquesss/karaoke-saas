@@ -80,11 +80,15 @@ export function AddSongDialog({ onClose, onCreated }: Props) {
 
         <div className="row">
           <label>
-            Título <span className="muted">(opcional)</span>
+            <span>
+              Título <span className="muted">(opcional)</span>
+            </span>
             <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Detectado automaticamente" />
           </label>
           <label>
-            Artista <span className="muted">(opcional)</span>
+            <span>
+              Artista <span className="muted">(opcional)</span>
+            </span>
             <input value={artist} onChange={(e) => setArtist(e.target.value)} />
           </label>
         </div>

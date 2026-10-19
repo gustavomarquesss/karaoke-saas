@@ -46,6 +46,15 @@ export class JobQueue extends EventEmitter {
     }
   }
 
+  /** Encerra tudo que está rodando (usado ao desligar a API). */
+  shutdown(): void {
+    this.waiting = [];
+    for (const [id, run] of this.running) {
+      this.cancelled.add(id); // continua "processing" no banco e é retomado no próximo boot
+      run.kill();
+    }
+  }
+
   isBusy(songId: string): boolean {
     return this.running.has(songId) || this.waiting.some((j) => j.songId === songId);
   }
@@ -76,7 +85,18 @@ export class JobQueue extends EventEmitter {
   private async execute(job: Job): Promise<void> {
     const { songId } = job;
     const run = this.runner.run(this.args(job), (ev) => {
-      if (ev.event === 'progress') {
+      if (ev.event === 'meta') {
+        // mostra título/capa já após o download, sem esperar o fim do processamento
+        const cur = this.store.get(songId);
+        this.publish(
+          this.store.update(songId, {
+            title: cur?.title_locked ? undefined : ev.title || undefined,
+            artist: cur?.title_locked ? undefined : ev.artist || undefined,
+            duration: ev.duration ?? undefined,
+            has_cover: ev.has_cover ? 1 : undefined,
+          }),
+        );
+      } else if (ev.event === 'progress') {
         this.publish(
           this.store.update(songId, {
             status: 'processing',
@@ -100,9 +120,9 @@ export class JobQueue extends EventEmitter {
           progress: 1,
           message: 'Pronto',
           error: null,
-          // o que o usuário informou/editou tem prioridade sobre o detectado
-          title: current?.title || meta.title || undefined,
-          artist: current?.artist || meta.artist || undefined,
+          // título/artista informados ou editados pelo usuário (title_locked) não são sobrescritos
+          title: current?.title_locked ? undefined : meta.title || undefined,
+          artist: current?.title_locked ? undefined : meta.artist || undefined,
           duration: meta.duration ?? undefined,
           language: meta.language ?? undefined,
           lyrics_source: meta.lyrics_source ?? undefined,

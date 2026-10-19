@@ -55,8 +55,9 @@ export class KaraokePlayer {
           } else handler.call(node.port, e);
         };
       });
-      node.port.postMessage({ type: 'load', vocals, instrumental }, [vocals.l.buffer, vocals.r.buffer, instrumental.l.buffer, instrumental.r.buffer]);
+      // a duração precisa ser lida ANTES de transferir os buffers (depois eles ficam com tamanho 0)
       player.duration = Math.max(vocals.l.length, instrumental.l.length) / SAMPLE_RATE;
+      node.port.postMessage({ type: 'load', vocals, instrumental }, [vocals.l.buffer, vocals.r.buffer, instrumental.l.buffer, instrumental.r.buffer]);
       await ready;
       return player;
     } catch (err) {

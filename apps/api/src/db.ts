@@ -21,12 +21,14 @@ export interface Song {
   lyrics_source: string | null;
   offset_ms: number;
   has_cover: number;
+  /** 1 quando título/artista vieram do usuário (não devem ser sobrescritos pela detecção) */
+  title_locked: number;
   created_at: string;
   updated_at: string;
 }
 
 /** Campos que o cliente vê (sem source_key). */
-export type SongView = Omit<Song, 'source_key'>;
+export type SongView = Omit<Song, 'source_key' | 'title_locked'>;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS songs (
@@ -45,6 +47,7 @@ CREATE TABLE IF NOT EXISTS songs (
   lyrics_source TEXT,
   offset_ms INTEGER NOT NULL DEFAULT 0,
   has_cover INTEGER NOT NULL DEFAULT 0,
+  title_locked INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -52,7 +55,7 @@ CREATE TABLE IF NOT EXISTS songs (
 
 const UPDATABLE = [
   'title', 'artist', 'duration', 'source_url', 'status', 'stage', 'progress', 'message',
-  'error', 'language', 'lyrics_source', 'offset_ms', 'has_cover',
+  'error', 'language', 'lyrics_source', 'offset_ms', 'has_cover', 'title_locked',
 ] as const;
 export type SongPatch = Partial<Pick<Song, (typeof UPDATABLE)[number]>>;
 
@@ -64,6 +67,11 @@ export class SongStore {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec(SCHEMA);
+    try {
+      this.db.exec('ALTER TABLE songs ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0');
+    } catch {
+      /* coluna já existe */
+    }
   }
 
   list(q?: string): Song[] {
@@ -84,10 +92,10 @@ export class SongStore {
     return this.db.prepare('SELECT * FROM songs WHERE source_key = ?').get(key) as unknown as Song | undefined;
   }
 
-  insert(song: { id: string; source_key: string; source_url: string | null; title: string; artist: string }): Song {
+  insert(song: { id: string; source_key: string; source_url: string | null; title: string; artist: string; title_locked?: number }): Song {
     this.db
-      .prepare('INSERT INTO songs (id, source_key, source_url, title, artist) VALUES (?, ?, ?, ?, ?)')
-      .run(song.id, song.source_key, song.source_url, song.title, song.artist);
+      .prepare('INSERT INTO songs (id, source_key, source_url, title, artist, title_locked) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(song.id, song.source_key, song.source_url, song.title, song.artist, song.title_locked ?? 0);
     return this.get(song.id)!;
   }
 
@@ -118,4 +126,4 @@ export class SongStore {
   }
 }
 
-export const toView = ({ source_key: _k, ...rest }: Song): SongView => rest;
+export const toView = ({ source_key: _k, title_locked: _l, ...rest }: Song): SongView => rest;
