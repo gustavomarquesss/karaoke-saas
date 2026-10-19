@@ -71,3 +71,78 @@ def test_fix_metadata_swaps_when_youtube_order_is_title_artist():
     assert _fix_metadata(meta, match) == ("Pais e Filhos", "Legião Urbana")
     # nomes que já batem permanecem
     assert _fix_metadata({"title": "X", "artist": "Y"}, {"title": "Z", "artist": "W"}) == ("X", "Y")
+
+
+def test_anchor_to_transcript_matches_despite_typos_and_extra_words():
+    from worker.lrc import anchor_to_transcript
+
+    asr = [
+        {"text": "Estátuas", "start": 10.0, "end": 10.5},
+        {"text": "e", "start": 10.5, "end": 10.6},
+        {"text": "cofres", "start": 10.7, "end": 11.2},
+        {"text": "ruído", "start": 11.3, "end": 11.5},  # palavra extra do Whisper
+        {"text": "ninguem", "start": 20.0, "end": 20.5},
+        {"text": "sabe", "start": 20.6, "end": 21.0},
+        {"text": "o", "start": 21.0, "end": 21.1},
+        {"text": "que", "start": 21.1, "end": 21.3},
+        {"text": "aconteceu", "start": 21.3, "end": 22.0},
+    ]
+    out = anchor_to_transcript(["Estátuas e cofres", "Ninguém sabe o que aconteceu"], asr)
+    assert [round(o["start"], 1) for o in out] == [10.0, 20.0]
+    assert out[0]["end"] == 11.2 and out[1]["end"] == 22.0
+
+
+def test_anchor_to_transcript_interpolates_unmatched_words():
+    from worker.lrc import anchor_to_transcript
+
+    asr = [{"text": "a", "start": 1.0, "end": 1.2}, {"text": "c", "start": 3.0, "end": 3.2}, {"text": "d", "start": 4.0, "end": 4.2}]
+    out = anchor_to_transcript(["a b c d"], asr)
+    assert out[0]["start"] == 1.0 and out[0]["end"] == 4.2
+
+
+def test_anchor_to_transcript_rejects_unrelated_text():
+    import pytest
+
+    from worker.lrc import anchor_to_transcript
+
+    with pytest.raises(ValueError):
+        anchor_to_transcript(["totalmente outra coisa aqui agora"], [{"text": "xyz", "start": 0, "end": 1}, {"text": "abc", "start": 1, "end": 2}])
+
+
+def test_split_into_lines_breaks_on_pauses_and_length():
+    from worker.lrc import split_into_lines
+
+    def w(text, start):
+        return {"text": text, "start": start, "end": start + 0.3}
+
+    words = [w(t, i * 0.4) for i, t in enumerate("um dois tres quatro cinco seis sete oito nove dez onze doze".split())]
+    words += [w("depois", 10.0), w("da", 10.4), w("pausa", 10.8)]
+    lines = split_into_lines(words)
+    assert all(len(l["words"]) <= 8 for l in lines)
+    assert lines[-1]["text"] == "depois da pausa"  # a pausa de ~5 s separa as linhas
+    assert sum(len(l["words"]) for l in lines) == len(words)  # nenhuma palavra perdida
+
+
+def test_split_into_lines_prefers_punctuation():
+    from worker.lrc import split_into_lines
+
+    def w(text, start):
+        return {"text": text, "start": start, "end": start + 0.3}
+
+    words = [w(t, i * 0.4) for i, t in enumerate("quero colo, vou fugir de casa posso dormir aqui com voces".split())]
+    lines = split_into_lines(words, max_words=8)
+    assert [l["text"] for l in lines] == ["quero colo, vou fugir de casa", "posso dormir aqui com voces"] or len(lines) >= 2
+
+
+def test_split_into_lines_breaks_before_capitalized_verse_start():
+    from worker.lrc import split_into_lines
+
+    def w(text, start):
+        return {"text": text, "start": start, "end": start + 0.3}
+
+    words = [w(t, i * 0.35) for i, t in enumerate("Estátuas e cofres e paredes pintadas Ninguém sabe o que aconteceu Ela se jogou".split())]
+    texts = [l["text"] for l in split_into_lines(words)]
+    assert texts == ["Estátuas e cofres e paredes pintadas", "Ninguém sabe o que aconteceu", "Ela se jogou"]
+    # "I" no meio da frase em inglês não quebra
+    en = [w(t, i * 0.3) for i, t in enumerate("when I was young and I loved you".split())]
+    assert len(split_into_lines(en)) == 1

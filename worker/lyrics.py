@@ -177,9 +177,9 @@ def align_plain_text(text: str, audio: np.ndarray, language: str, device: str, o
 
 # ----------------------------------------------------------------- transcrição
 
-def transcribe(audio: np.ndarray, device: str, on_progress: ProgressFn) -> tuple[list[dict], str]:
+def transcribe(audio: np.ndarray, device: str, on_progress: ProgressFn, language: str | None = None) -> tuple[list[dict], str]:
     """Transcreve com WhisperX (fallback: faster-whisper) e devolve linhas com palavras + idioma."""
-    forced = os.environ.get("LYRICS_LANGUAGE", "").strip() or None
+    forced = language or os.environ.get("LYRICS_LANGUAGE", "").strip() or None
     try:
         return _transcribe_whisperx(audio, device, forced, on_progress)
     except Exception as exc:
@@ -206,7 +206,7 @@ def _transcribe_whisperx(audio, device, language, on_progress):
         words = lrc.split_words(src["text"])
         if words:
             lines.append(lrc.make_line(_words_from_aligned(seg, words, src["start"], src["end"])))
-    return lrc.normalize_monotonic(lines), lang
+    return _regroup(lines), lang
 
 
 def _transcribe_faster_whisper(audio, device, language, on_progress):
@@ -223,7 +223,23 @@ def _transcribe_faster_whisper(audio, device, language, on_progress):
         if words:
             lines.append(lrc.make_line(words))
         on_progress(min(seg.end / (len(audio) / SAMPLE_RATE), 1.0), "Transcrevendo")
-    return lrc.normalize_monotonic(lines), info.language
+    return _regroup(lines), info.language
+
+
+def align_plain_via_transcript(text: str, audio: np.ndarray, language: str, device: str, on_progress: ProgressFn) -> list[dict]:
+    """Letra sem tempos: transcreve o vocal, casa a letra digitada com o que foi reconhecido (janelas
+    aproximadas por linha) e refina cada linha com o alinhador. Bem mais robusto que alinhar a música
+    inteira de uma vez, que deriva em trechos instrumentais e refrões."""
+    asr_lines, _ = transcribe(audio, device, lambda f, m: on_progress(f * 0.5, m), language=language)
+    asr_words = [w for ln in asr_lines for w in ln["words"]]
+    windows = lrc.anchor_to_transcript(lrc.lines_from_plain(text), asr_words)
+    return align_lines(windows, audio, language, device, lambda f, m: on_progress(0.5 + f * 0.5, m))
+
+
+def _regroup(lines: list[dict]) -> list[dict]:
+    """Segmentos do Whisper são longos demais para karaokê: reparte por pausas e tamanho."""
+    words = [w for ln in lines for w in ln["words"]]
+    return lrc.normalize_monotonic(lrc.split_into_lines(words))
 
 
 # ----------------------------------------------------------------- orquestração
@@ -249,7 +265,12 @@ def build_lyrics(
         if entries:
             lines = lrc.lines_from_lrc(entries, duration)
             return {"language": language, "source": "manual", "lines": align_lines(lines, audio, language, device, ali)}
-        return {"language": language, "source": "manual", "lines": align_plain_text(lyrics_text, audio, language, device, ali)}
+        try:
+            lines = align_plain_via_transcript(lyrics_text, audio, language, device, ali)
+        except Exception as exc:  # noqa: BLE001  (Whisper indisponível ou letra não bate com o áudio)
+            log(f"Ancoragem pela transcrição falhou ({exc}); alinhando a música inteira de uma vez.")
+            lines = align_plain_text(lyrics_text, audio, language, device, ali)
+        return {"language": language, "source": "manual", "lines": lines}
 
     lyr(0.1, "Buscando letra no LRCLIB")
     record = fetch_lrclib(title, artist, duration)

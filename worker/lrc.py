@@ -112,3 +112,113 @@ def normalize_monotonic(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
         line["start"] = line["words"][0]["start"]
         line["end"] = line["words"][-1]["end"]
     return lines
+
+
+def norm_word(w: str) -> str:
+    """Minúsculas, sem acentos nem pontuação (para comparar letra digitada × transcrição)."""
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFD", w.lower())
+    return "".join(ch for ch in decomposed if ch.isalnum())
+
+
+def anchor_to_transcript(user_lines: list[str], asr_words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Dá uma janela de tempo aproximada a cada linha da letra do usuário.
+
+    Casa as palavras digitadas com as palavras reconhecidas pelo Whisper (difflib), usa o tempo das
+    que casaram e interpola as demais. Devolve [{start, end, text}] por linha, pronto para o alinhador.
+    """
+    from difflib import SequenceMatcher
+
+    user_words = [w for ln in user_lines for w in split_words(ln)]
+    if not user_words or not asr_words:
+        raise ValueError("sem palavras para ancorar")
+    u = [norm_word(w) for w in user_words]
+    a = [norm_word(w["text"]) for w in asr_words]
+    times: list[tuple[float, float] | None] = [None] * len(u)
+    for block in SequenceMatcher(None, u, a, autojunk=False).get_matching_blocks():
+        for k in range(block.size):
+            if u[block.a + k]:  # ignora "palavras" que viraram vazias (ex.: "—")
+                w = asr_words[block.b + k]
+                times[block.a + k] = (w["start"], w["end"])
+    matched = [i for i, t in enumerate(times) if t is not None]
+    if len(matched) < max(3, len(u) // 5):
+        raise ValueError("a letra não bate com o que foi cantado")
+
+    # interpola quem ficou sem tempo, entre âncoras vizinhas (proporcional ao tamanho)
+    first = matched[0]
+    resolved: list[tuple[float, float]] = [(0.0, 0.0)] * len(u)
+    i = 0
+    while i < len(u):
+        if times[i] is not None:
+            resolved[i] = times[i]  # type: ignore[assignment]
+            i += 1
+            continue
+        j = i
+        while j < len(u) and times[j] is None:
+            j += 1
+        left = resolved[i - 1][1] if i > 0 else (times[first][0] - 0.3 * (first + 1) if first > 0 else times[first][0])  # type: ignore[index]
+        right = times[j][0] if j < len(u) else resolved[i - 1][1] + 0.4 * (j - i)  # type: ignore[index]
+        right = max(right, left)
+        for w, spread in zip(range(i, j), spread_words(user_words[i:j], left, right)):
+            resolved[w] = (spread["start"], spread["end"])
+        i = j
+
+    out: list[dict[str, Any]] = []
+    idx = 0
+    for ln in user_lines:
+        n = len(split_words(ln))
+        if n == 0:
+            continue
+        chunk = resolved[idx : idx + n]
+        idx += n
+        start, end = min(c[0] for c in chunk), max(c[1] for c in chunk)
+        out.append({"start": round(start, 3), "end": round(max(end, start + 0.3), 3), "text": ln})
+    # garante ordem crescente das janelas
+    for k in range(1, len(out)):
+        if out[k]["start"] < out[k - 1]["start"]:
+            out[k]["start"] = out[k - 1]["start"]
+            out[k]["end"] = max(out[k]["end"], out[k]["start"] + 0.3)
+    return out
+
+
+def split_into_lines(words: list[dict[str, Any]], max_words: int = 8, max_chars: int = 42, pause: float = 0.7) -> list[dict[str, Any]]:
+    """Reagrupa palavras com tempo em linhas de karaokê legíveis.
+
+    O Whisper devolve segmentos longos (20+ palavras); aqui quebramos em pausas e limitamos o tamanho.
+    Prefere quebrar depois de pontuação (, . ? ! ;) e de pausas; nunca deixa uma linha de 1 palavra
+    só por causa do limite de tamanho.
+    """
+    lines: list[list[dict[str, Any]]] = []
+    cur: list[dict[str, Any]] = []
+    for i, w in enumerate(words):
+        if cur:
+            gap = w["start"] - cur[-1]["end"]
+            chars = sum(len(x["text"]) + 1 for x in cur) + len(w["text"])
+            ends_clause = cur[-1]["text"].rstrip().endswith((",", ".", "?", "!", ";", ":"))
+            # o Whisper costuma capitalizar o início de cada verso: maiúscula no meio da linha = nova linha
+            first = w["text"].lstrip("¿¡(\"'")
+            new_verse = len(cur) >= 3 and first[:1].isupper() and first not in {"I", "I'm", "I'll", "I've", "I'd", "Deus"}
+            if new_verse:
+                lines.append(cur)
+                cur = []
+                cur.append(w)
+                continue
+            too_long = len(cur) >= max_words or chars > max_chars
+            if gap >= pause or (too_long and (ends_clause or len(cur) >= max_words)) or (chars > max_chars + 12):
+                lines.append(cur)
+                cur = []
+            elif ends_clause and len(cur) >= 4 and chars > max_chars * 0.6:
+                lines.append(cur)
+                cur = []
+        cur.append(w)
+    if cur:
+        lines.append(cur)
+    # une "órfãs" de 1 palavra à linha vizinha mais próxima no tempo, se couber
+    merged: list[list[dict[str, Any]]] = []
+    for ln in lines:
+        if merged and len(ln) == 1 and ln[0]["start"] - merged[-1][-1]["end"] < pause and len(merged[-1]) < max_words:
+            merged[-1].extend(ln)
+        else:
+            merged.append(ln)
+    return [make_line(ln) for ln in merged]

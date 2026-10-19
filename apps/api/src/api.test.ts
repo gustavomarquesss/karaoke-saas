@@ -133,6 +133,29 @@ describe('API', () => {
     assert.equal(res.rawPayload.length, 100);
   });
 
+  it('aceita upload de arquivo, usa o nome como título e deduplica pelo conteúdo', async () => {
+    const boundary = '----karaoketest';
+    const CRLF = String.fromCharCode(13, 10);
+    const part = (headers: string[], content: string) => ['--' + boundary, ...headers, '', content, ''].join(CRLF);
+    const body = Buffer.from(
+      part(['Content-Disposition: form-data; name="artist"'], 'Minha Banda') +
+        part(['Content-Disposition: form-data; name="file"; filename="meu som.mp3"', 'Content-Type: audio/mpeg'], 'FAKEAUDIO') +
+        '--' + boundary + '--' + CRLF,
+    );
+    const headers = { 'content-type': `multipart/form-data; boundary=${boundary}` };
+    const first = await app.inject({ method: 'POST', url: '/api/songs/upload', headers, payload: body });
+    assert.equal(first.statusCode, 201);
+    assert.equal(first.json().title, 'meu som');
+    assert.equal(first.json().artist, 'Minha Banda');
+    await waitReady(first.json().id);
+    const again = await app.inject({ method: 'POST', url: '/api/songs/upload', headers, payload: body });
+    assert.equal(again.statusCode, 200);
+    assert.equal(again.json().duplicate, true);
+    assert.equal(again.json().id, first.json().id);
+    const noFile = await app.inject({ method: 'POST', url: '/api/songs/upload', headers, payload: Buffer.from('--' + boundary + '--' + CRLF) });
+    assert.equal(noFile.statusCode, 400);
+  });
+
   it('exclui música e arquivos', async () => {
     const [song] = (await app.inject({ method: 'GET', url: '/api/songs' })).json();
     const res = await app.inject({ method: 'DELETE', url: `/api/songs/${song.id}` });

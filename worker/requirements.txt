@@ -5,3 +5,4 @@ yt-dlp
 imageio-ffmpeg
 soundfile
 pytest
+hf_xet
