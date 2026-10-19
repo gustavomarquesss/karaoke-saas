@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+data/
+worker/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# modelos baixados
+.cache/
+models/
+*.pt
+*.ckpt
+*.log
+.DS_Store
+worker/.bin/

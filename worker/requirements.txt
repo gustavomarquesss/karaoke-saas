@@ -1,0 +1,7 @@
+# Instalar torch/torchaudio ANTES (ver scripts/setup.ps1): CUDA usa o índice cu128.
+whisperx>=3.8
+demucs>=4.0.1
+yt-dlp
+imageio-ffmpeg
+soundfile
+pytest
