@@ -1,0 +1,20 @@
+{
+  "name": "karaoke",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Karaokê pessoal com IA (Demucs + WhisperX), uso local",
+  "workspaces": ["apps/*"],
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm run dev -w @karaoke/api\" \"npm run dev -w @karaoke/web\"",
+    "build": "npm run build -w @karaoke/web && npm run build -w @karaoke/api",
+    "start": "npm run start -w @karaoke/api",
+    "test": "npm run test -w @karaoke/api && npm run test -w @karaoke/web",
+    "test:worker": "python -m pytest worker",
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/setup.mjs --check"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
