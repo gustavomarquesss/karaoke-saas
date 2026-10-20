@@ -3,12 +3,15 @@ import { api, fileUrl } from '../api';
 import { LyricLine, paintLine } from '../components/LyricLine';
 import { KaraokePlayer } from '../audio/player';
 import { VoiceRecorder } from '../audio/recorder';
+import { RecordingSession, type Segment } from '../audio/session';
 import { ExportDialog } from '../components/ExportDialog';
-import { RecordingDialog, type TakeData } from '../components/RecordingDialog';
+import { SessionDialog } from '../components/SessionDialog';
+import { VoiceFxPanel } from '../components/VoiceFxPanel';
+import { loadFxState, saveFxState, type VoiceFxState } from '../lib/voicefx';
 import { useQueue } from '../hooks/useQueue';
 import { nextInQueue } from '../lib/queue';
 import { hrefs } from '../hooks/useRoute';
-import { displayState, formatTime, lyricTime, type DisplayState } from '../lib/lyrics';
+import { displayState, formatTime, lineJumpTarget, lyricTime, type DisplayState } from '../lib/lyrics';
 import { clamp, loadLayout, loadSettings, saveLayout, saveSettings, type LyricLayout, type PlayerSettings } from '../lib/settings';
 import type { Line, Song } from '../types';
 
@@ -23,6 +26,8 @@ const SHORTCUTS: [string, string][] = [
   ['L', 'Alternar layout da letra'],
   ['F', 'Tela cheia'],
   ['Home', 'Voltar ao início'],
+  ['P  N', 'Linha anterior / próxima (pular para cantar um trecho)'],
+  ['R', 'Gravar / pausar a gravação'],
 ];
 
 const sameState = (a: DisplayState, b: DisplayState) => a.current === b.current && a.next === b.next && a.active === b.active && (a.countdown === null) === (b.countdown === null) && (a.countdown === null || Math.ceil(a.countdown) === Math.ceil(b.countdown!));
@@ -45,16 +50,33 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
   const [help, setHelp] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [recState, setRecState] = useState<'idle' | 'starting' | 'recording'>('idle');
-  const [take, setTake] = useState<TakeData | null>(null);
+  const [review, setReview] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
+  const [countIn, setCountIn] = useState<number | null>(null);
+  const [countInSecs, setCountInSecs] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem('karaoke:countin') ?? 3);
+    } catch {
+      return 3;
+    }
+  });
+  const [fxState, setFxState] = useState<VoiceFxState>(loadFxState);
+  const [sessionRev, setSessionRev] = useState(0);
   const { queue } = useQueue();
   const nextId = nextInQueue(queue, id);
   const nextIdRef = useRef(nextId);
   nextIdRef.current = nextId;
   const recorder = useRef<VoiceRecorder | null>(null);
-  const recStart = useRef(0);
+  const session = useRef<RecordingSession | null>(null);
+  const countToken = useRef(0);
   const recStateRef = useRef(recState);
   recStateRef.current = recState;
+  const fxRef = useRef(fxState);
+  fxRef.current = fxState;
+  const countInRef = useRef(countInSecs);
+  countInRef.current = countInSecs;
+  const latencies = useRef({ output: 0, input: 0 });
+  void sessionRev; // força re-render quando a sessão muda (trechos novos)
 
   const player = useRef<KaraokePlayer | null>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -100,8 +122,8 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
         p.onPlayingChange = setPlaying;
         p.onEnded = () => {
           setPlaying(false);
-          if (recStateRef.current === 'recording') void finishRecording();
-          else if (nextIdRef.current) window.setTimeout(() => (location.hash = hrefs.play(nextIdRef.current!, true)), 1500);
+          if (recStateRef.current === 'recording') void pauseRecording();
+          else if (nextIdRef.current && !session.current?.hasSegments) window.setTimeout(() => (location.hash = hrefs.play(nextIdRef.current!, true)), 1500);
         };
         if (autoplay) void p.play().catch(() => {});
         setDuration(p.duration);
@@ -167,7 +189,8 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
   const togglePlay = useCallback(() => {
     const p = player.current;
     if (!p) return;
-    if (recStateRef.current === 'recording') return void finishRecording();
+    if (recStateRef.current === 'recording') return void pauseRecording();
+    if (recStateRef.current === 'starting') return cancelStart();
     if (p.isPlaying) p.pause();
     else {
       if (p.currentTime >= p.duration - 0.1) p.seek(0);
@@ -177,19 +200,44 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
 
   const seekBy = useCallback((delta: number) => {
     const p = player.current;
-    if (!p || recStateRef.current !== 'idle') return;
+    if (!p || recStateRef.current === 'starting') return;
     p.seek(p.currentTime + delta);
     setTime(p.currentTime);
   }, []);
 
   const seekTo = useCallback((t: number) => {
-    if (recStateRef.current !== 'idle') return;
+    if (recStateRef.current === 'starting') return;
     player.current?.seek(t);
     setTime(t);
   }, []);
 
+  /** Pula para a linha anterior/próxima (cai um pouco antes para dar tempo de se preparar). */
+  const jumpLine = useCallback((dir: 1 | -1) => {
+    const p = player.current;
+    if (!p || recStateRef.current === 'starting') return;
+    const t = lyricTime(p.currentTime, offsetRef.current);
+    const target = lineJumpTarget(linesRef.current, t, dir);
+    if (target === null) return;
+    const at = target + offsetRef.current / 1000;
+    p.seek(at);
+    setTime(at);
+  }, []);
+
+  /** Clique numa linha da letra: vai para ela (com a folga de preparação). */
+  const onLyricClick = (e: React.MouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-line]');
+    const p = player.current;
+    if (!el || !p || recStateRef.current === 'starting') return;
+    const line = linesRef.current[Number(el.dataset.line)];
+    if (!line) return;
+    const at = Math.max(0, line.start - 0.8) + offsetRef.current / 1000;
+    p.seek(at);
+    setTime(at);
+  };
+
   const update = useCallback(
     (patch: Partial<PlayerSettings>) => {
+      if ((patch.tempo !== undefined || patch.semitones !== undefined) && (recStateRef.current !== 'idle' || session.current?.hasSegments)) return; // tom/velocidade valem para toda a gravação
       const next = { ...settingsRef.current, ...patch };
       next.semitones = clamp(Math.round(next.semitones), -12, 12);
       next.tempo = clamp(Math.round(next.tempo * 100) / 100, 0.5, 1.5);
@@ -241,55 +289,138 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
     } else update({ vocal: mutedVocal.current || 0.25 });
   }, [update]);
 
-  // ---------------------------------------------------------------- gravação da voz
+  // ---------------------------------------------------------------- gravação da voz (trechos)
+  const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+  const cancelStart = useCallback(() => {
+    countToken.current++;
+    setCountIn(null);
+  }, []);
+
+  /** Começa um trecho a partir da posição atual (com contagem regressiva, se ligada). */
   const startRecording = useCallback(async () => {
     const p = player.current;
     if (!p || recStateRef.current !== 'idle') return;
     setRecError(null);
     setRecState('starting');
+    recStateRef.current = 'starting';
+    const token = ++countToken.current;
     try {
-      const rec = await VoiceRecorder.create(p.audioContext);
-      recorder.current = rec;
+      if (!session.current) session.current = new RecordingSession(p.sampleRate, settingsRef.current.tempo, settingsRef.current.semitones);
+      const sess = session.current;
       p.pause();
-      p.seek(0);
-      const started = new Promise<number>((resolve) => {
-        p.onStarted = (frame) => resolve(frame);
-      });
+      if (p.currentTime >= p.duration - 0.5) p.seek(0);
+      const rec = await VoiceRecorder.create(p.audioContext, (frame, data) => sess.store.add(frame, data));
+      recorder.current = rec;
+      latencies.current = { output: (p.audioContext.outputLatency || 0) + p.audioContext.baseLatency, input: rec.inputLatency };
+      rec.setMonitor(fxRef.current.monitor, fxRef.current.fx);
+      const secs = countInRef.current;
+      for (let i = secs; i > 0; i--) {
+        setCountIn(i);
+        await sleep(1000);
+        if (countToken.current !== token) throw new Error('cancelado');
+      }
+      setCountIn(null);
+      if (secs === 0) await sleep(150); // dá tempo de o microfone começar a capturar antes da música
+      if (countToken.current !== token) throw new Error('cancelado');
+      // cada (re)início da música — inclusive um salto — abre um novo trecho
+      p.onStarted = (frame, media) => {
+        sess.begin(frame, media);
+        setSessionRev((r) => r + 1);
+      };
+      p.onStopped = (frame) => {
+        if (sess.end(frame)) setSessionRev((r) => r + 1);
+      };
       await p.play();
-      recStart.current = await started;
-      p.onStarted = undefined;
       setRecState('recording');
     } catch (e) {
-      recorder.current?.dispose();
+      recorder.current?.stop();
       recorder.current = null;
-      setRecError((e as Error).message);
+      p.onStarted = undefined;
+      p.onStopped = undefined;
+      setCountIn(null);
       setRecState('idle');
+      if ((e as Error).message !== 'cancelado') setRecError((e as Error).message);
     }
   }, []);
 
-  const finishRecording = useCallback(async () => {
+  /** Pausa a música e fecha o trecho atual; a sessão continua aberta para retomar (ou pular antes). */
+  const pauseRecording = useCallback(async () => {
     const p = player.current;
     const rec = recorder.current;
-    if (!p || !rec || recStateRef.current !== 'recording') return;
-    recorder.current = null;
+    if (!p || recStateRef.current !== 'recording') return;
     recStateRef.current = 'idle';
-    if (p.isPlaying) {
-      await new Promise<void>((resolve) => {
-        const fallback = window.setTimeout(resolve, 800);
-        p.onStopped = () => {
-          window.clearTimeout(fallback);
-          resolve();
-        };
-        p.pause();
-      });
-      p.onStopped = undefined;
-    }
-    const t = rec.stop();
     setRecState('idle');
-    setTake({ ...t, startFrame: recStart.current, stopFrame: p.lastStopFrame, sampleRate: p.sampleRate, outputLatency: (p.audioContext.outputLatency || 0) + p.audioContext.baseLatency });
+    if (p.isPlaying) p.pause();
+    await sleep(600); // a voz chega com atraso (latência): captura mais um pouco antes de fechar o microfone
+    p.onStarted = undefined;
+    p.onStopped = undefined;
+    if (recorder.current === rec) {
+      rec?.stop();
+      recorder.current = null;
+    }
+    setSessionRev((r) => r + 1);
   }, []);
 
-  useEffect(() => () => recorder.current?.dispose(), []);
+  const toggleRecording = useCallback(() => {
+    if (recStateRef.current === 'recording') void pauseRecording();
+    else if (recStateRef.current === 'starting') cancelStart();
+    else void startRecording();
+  }, [pauseRecording, startRecording, cancelStart]);
+
+  /** Encerra a captura e abre a edição. */
+  const finishRecording = useCallback(async () => {
+    if (recStateRef.current === 'recording') await pauseRecording();
+    else if (recStateRef.current === 'starting') cancelStart();
+    if (session.current?.hasSegments) setReview(true);
+  }, [pauseRecording, cancelStart]);
+
+  const discardSession = useCallback(() => {
+    cancelStart();
+    recorder.current?.stop();
+    recorder.current = null;
+    session.current = null;
+    setReview(false);
+    setSessionRev((r) => r + 1);
+  }, [cancelStart]);
+
+  const rerecord = useCallback(
+    (seg: Segment) => {
+      const p = player.current;
+      const sess = session.current;
+      if (!p || !sess) return;
+      setReview(false);
+      p.seek(Math.max(0, seg.mediaStart / sess.sampleRate - 0.5));
+      void startRecording();
+    },
+    [startRecording],
+  );
+
+  const changeFx = useCallback((next: VoiceFxState) => {
+    setFxState(next);
+    saveFxState(next);
+    recorder.current?.setMonitor(next.monitor, next.fx); // ao vivo: o efeito muda enquanto você canta
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('karaoke:countin', String(countInSecs));
+    } catch {
+      /* ignora */
+    }
+  }, [countInSecs]);
+
+  // sair da página com gravação não salva
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (session.current?.hasSegments) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      recorder.current?.stop();
+    };
+  }, []);
 
   // fullscreen e ociosidade (esconde controles/cursor)
   useEffect(() => {
@@ -370,6 +501,18 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
         case '.':
           changeOffset(offsetRef.current + 50);
           break;
+        case 'p':
+        case 'P':
+          jumpLine(-1);
+          break;
+        case 'n':
+        case 'N':
+          jumpLine(1);
+          break;
+        case 'r':
+        case 'R':
+          toggleRecording();
+          break;
         case 'f':
         case 'F':
           toggleFullscreen();
@@ -402,7 +545,7 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, seekBy, seekTo, update, toggleVocalMute, changeOffset, toggleFullscreen, cycleLayout]);
+  }, [togglePlay, seekBy, seekTo, update, toggleVocalMute, changeOffset, toggleFullscreen, cycleLayout, jumpLine, toggleRecording]);
 
   // ---------------------------------------------------------------- render
   const lineState = (i: number): 'past' | 'current' | 'next' | 'future' => (i < view.current ? 'past' : i === view.current ? 'current' : i === view.next ? 'next' : 'future');
@@ -412,13 +555,19 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
     return [view.current, view.next].filter((i) => i >= 0);
   }, [layout, lines, view.current, view.next]);
 
+  const sess = session.current;
+  const locked = recState !== 'idle' || !!sess?.hasSegments; // tom/velocidade valem para toda a gravação
   const title = song?.title || 'Karaokê';
   const dots = view.countdown !== null ? Math.max(1, Math.ceil(view.countdown)) : 0;
 
   return (
     <div ref={root} className={`player ${fullscreen ? 'fullscreen' : ''} ${idle && playing ? 'idle' : ''}`}>
       <header className="player-top">
-        <a className="btn ghost" href={hrefs.library}>
+        <a
+          className="btn ghost"
+          href={hrefs.library}
+          onClick={(e) => session.current?.hasSegments && !confirm('Você tem uma gravação não salva. Sair mesmo assim?') && e.preventDefault()}
+        >
           ← Biblioteca
         </a>
         <div className="player-title">
@@ -431,14 +580,6 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
               Próxima ⏭
             </a>
           )}
-          <button
-            className={`btn ghost ${recState === 'recording' ? 'rec' : ''}`}
-            onClick={() => (recState === 'recording' ? void finishRecording() : void startRecording())}
-            disabled={phase !== 'ready' || recState === 'starting'}
-            title="Grava sua voz cantando junto (use fones de ouvido) e salva a mix"
-          >
-            {recState === 'recording' ? '■ Parar gravação' : recState === 'starting' ? 'Abrindo microfone…' : '🎙 Gravar'}
-          </button>
           <button className="btn ghost" onClick={() => setExporting(true)} disabled={phase !== 'ready' || !hasLyrics} title="Gera um MP4 com a letra queimada">
             Exportar MP4
           </button>
@@ -487,6 +628,12 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
           </div>
         )}
 
+        {countIn !== null && (
+          <div className="count-in" role="status" aria-live="assertive">
+            <span key={countIn}>{countIn}</span>
+            <small>prepare-se para cantar…</small>
+          </div>
+        )}
         {phase === 'ready' && hasLyrics && (
           <>
             <div className={`countdown ${dots ? 'on' : ''}`} aria-hidden={!dots}>
@@ -494,7 +641,7 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
                 <span key={n} className={n <= dots ? 'dot lit' : 'dot'} />
               ))}
             </div>
-            <div className="lyrics-track" ref={track}>
+            <div className="lyrics-track clickable" ref={track} onClick={onLyricClick} title="Clique numa linha para ir até ela">
               {visibleLines.map((i) => (
                 <LyricLine key={i} line={lines[i]} index={i} state={lineState(i)} />
               ))}
@@ -507,6 +654,12 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
         <div className="seek-row">
           <button className="play-btn" onClick={togglePlay} disabled={phase !== 'ready'} aria-label={playing ? 'Pausar' : 'Tocar'}>
             {playing ? '❚❚' : '▶'}
+          </button>
+          <button className="mini" onClick={() => jumpLine(-1)} disabled={phase !== 'ready' || !hasLyrics} title="Linha anterior (P)" aria-label="Linha anterior">
+            ⏮
+          </button>
+          <button className="mini" onClick={() => jumpLine(1)} disabled={phase !== 'ready' || !hasLyrics} title="Próxima linha (N)" aria-label="Próxima linha">
+            ⏭
           </button>
           <span className="time">{formatTime(time)}</span>
           <input
@@ -536,21 +689,84 @@ export function Player({ id, autoplay = false }: { id: string; autoplay?: boolea
           </Control>
 
           <Control label="Tom" value={`${settings.semitones > 0 ? '+' : ''}${settings.semitones} st`}>
-            <Stepper onMinus={() => update({ semitones: settings.semitones - 1 })} onPlus={() => update({ semitones: settings.semitones + 1 })} onReset={() => update({ semitones: 0 })} minusLabel="Tom abaixo" plusLabel="Tom acima" />
+            <Stepper disabled={locked} onMinus={() => update({ semitones: settings.semitones - 1 })} onPlus={() => update({ semitones: settings.semitones + 1 })} onReset={() => update({ semitones: 0 })} minusLabel="Tom abaixo" plusLabel="Tom acima" />
           </Control>
 
           <Control label="Velocidade" value={`${settings.tempo.toFixed(2)}×`}>
-            <Stepper onMinus={() => update({ tempo: settings.tempo - 0.05 })} onPlus={() => update({ tempo: settings.tempo + 0.05 })} onReset={() => update({ tempo: 1 })} minusLabel="Mais devagar" plusLabel="Mais rápido" />
+            <Stepper disabled={locked} onMinus={() => update({ tempo: settings.tempo - 0.05 })} onPlus={() => update({ tempo: settings.tempo + 0.05 })} onReset={() => update({ tempo: 1 })} minusLabel="Mais devagar" plusLabel="Mais rápido" />
           </Control>
 
           <Control label="Sincronia da letra" value={`${offset > 0 ? '+' : ''}${offset} ms`}>
             <Stepper onMinus={() => changeOffset(offset - 50)} onPlus={() => changeOffset(offset + 50)} onReset={() => changeOffset(0)} minusLabel="Adiantar letra" plusLabel="Atrasar letra" />
           </Control>
         </div>
+
+        <div className="rec-panel">
+          <div className="rec-head">
+            <strong>Gravação</strong>
+            <span className={`rec-status ${recState === 'recording' ? 'live' : ''}`}>
+              {recState === 'recording'
+                ? '● gravando — Espaço pausa, ⏮ ⏭ ou a barra pulam'
+                : recState === 'starting'
+                  ? countIn !== null
+                    ? 'começando…'
+                    : 'abrindo o microfone…'
+                  : sess?.hasSegments
+                    ? `${sess.segments.length} ${sess.segments.length === 1 ? 'trecho' : 'trechos'} · ${formatTime(sess.recordedSeconds())} gravados`
+                    : 'cante junto e grave só os trechos que quiser'}
+            </span>
+          </div>
+          <div className="rec-actions">
+            <button
+              className={`btn ${recState === 'recording' ? 'rec' : 'primary'}`}
+              onClick={toggleRecording}
+              disabled={phase !== 'ready'}
+              title="Gravar / pausar a gravação (R). Comece de qualquer ponto da música."
+            >
+              {recState === 'recording' ? '⏸ Pausar gravação' : recState === 'starting' ? 'Cancelar' : sess?.hasSegments ? '● Retomar gravação' : '🎙 Gravar daqui'}
+            </button>
+            {sess?.hasSegments && (
+              <>
+                <button className="btn" onClick={() => void finishRecording()} disabled={recState === 'starting'}>
+                  ■ Concluir e editar
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={() => confirm('Descartar todos os trechos gravados?') && discardSession()}
+                  disabled={recState !== 'idle'}
+                >
+                  Descartar
+                </button>
+              </>
+            )}
+            <label className="inline">
+              <span className="muted">Contagem</span>
+              <select value={countInSecs} onChange={(e) => setCountInSecs(Number(e.target.value))} disabled={recState !== 'idle'} aria-label="Contagem regressiva antes de gravar">
+                <option value={0}>sem</option>
+                <option value={3}>3 s</option>
+                <option value={5}>5 s</option>
+              </select>
+            </label>
+          </div>
+          <VoiceFxPanel state={fxState} onChange={changeFx} title="Efeito na voz" hint="Vale ao vivo (se ligar a escuta) e como padrão na edição." showMonitor />
+        </div>
       </footer>
 
       {exporting && song && <ExportDialog song={song} settings={settings} onClose={() => setExporting(false)} />}
-      {take && song && <RecordingDialog song={song} take={take} settings={settings} onClose={() => setTake(null)} />}
+      {review && song && session.current && (
+        <SessionDialog
+          song={song}
+          session={session.current}
+          settings={settings}
+          fxState={fxState}
+          onFxChange={changeFx}
+          outputLatency={latencies.current.output}
+          inputLatency={latencies.current.input}
+          onContinue={() => setReview(false)}
+          onRerecord={rerecord}
+          onDiscard={discardSession}
+        />
+      )}
 
       {help && (
         <div className="overlay" onMouseDown={() => setHelp(false)}>
@@ -590,16 +806,16 @@ function Control({ label, value, children }: { label: string; value: string; chi
   );
 }
 
-function Stepper({ onMinus, onPlus, onReset, minusLabel, plusLabel }: { onMinus: () => void; onPlus: () => void; onReset: () => void; minusLabel: string; plusLabel: string }) {
+function Stepper({ onMinus, onPlus, onReset, minusLabel, plusLabel, disabled = false }: { onMinus: () => void; onPlus: () => void; onReset: () => void; minusLabel: string; plusLabel: string; disabled?: boolean }) {
   return (
-    <div className="stepper">
-      <button className="mini" onClick={onMinus} aria-label={minusLabel}>
+    <div className="stepper" title={disabled ? 'Travado enquanto há uma gravação em andamento: tom e velocidade valem para toda a gravação' : undefined}>
+      <button className="mini" onClick={onMinus} aria-label={minusLabel} disabled={disabled}>
         −
       </button>
-      <button className="mini wide" onClick={onReset} aria-label="Restaurar padrão">
+      <button className="mini wide" onClick={onReset} aria-label="Restaurar padrão" disabled={disabled}>
         Reset
       </button>
-      <button className="mini" onClick={onPlus} aria-label={plusLabel}>
+      <button className="mini" onClick={onPlus} aria-label={plusLabel} disabled={disabled}>
         +
       </button>
     </div>

@@ -107,3 +107,17 @@ export function validateLyrics(lyrics: Lyrics): string[] {
   });
   return problems;
 }
+
+/**
+ * Para onde pular ao ir para a linha anterior/próxima. Cai um pouco ANTES da linha (`lead`) para
+ * dar tempo de se preparar. "Anterior" no meio de uma linha volta ao começo dela.
+ */
+export function lineJumpTarget(lines: Line[], t: number, dir: 1 | -1, lead = 0.8): number | null {
+  const landing = lines.map((l) => Math.max(0, l.start - lead));
+  if (dir === 1) {
+    const next = landing.find((s) => s > t + 0.25);
+    return next ?? null;
+  }
+  for (let i = landing.length - 1; i >= 0; i--) if (landing[i] < t - 1.5) return landing[i];
+  return null;
+}

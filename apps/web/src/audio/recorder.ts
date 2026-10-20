@@ -1,38 +1,38 @@
+import type { VoiceFx } from '../lib/voicefx';
 import recorderUrl from './recorder-processor.ts?worker&url';
+import { createVoiceChain, type VoiceChain } from './voicefx';
 
-export interface MicTake {
-  /** voz (mono) a partir de `firstFrame` */
-  mic: Float32Array;
-  /** frame do AudioContext em que a primeira amostra de `mic` foi capturada */
-  firstFrame: number;
-  /** latência de entrada informada pelo navegador (s), 0 se desconhecida */
-  inputLatency: number;
-}
-
-/** Grava o microfone cru (sem cancelamento de eco/AGC) em um AudioWorklet. */
+/**
+ * Captura o microfone cru (sem cancelamento de eco/AGC) num AudioWorklet e entrega blocos
+ * carimbados com o frame do AudioContext. Opcionalmente deixa você se ouvir com o efeito (fones!).
+ */
 export class VoiceRecorder {
-  private chunks: Float32Array[] = [];
-  private firstFrame: number | null = null;
+  /** latência de entrada informada pelo navegador (s); 0 se desconhecida */
+  readonly inputLatency: number;
   private gate: GainNode;
+  private chain: VoiceChain | null = null;
+  private monitorGain: GainNode | null = null;
+  private stopped = false;
 
   private constructor(
-    ctx: AudioContext,
+    private ctx: AudioContext,
     private stream: MediaStream,
     private src: MediaStreamAudioSourceNode,
     private node: AudioWorkletNode,
-    private inputLatency: number,
+    inputLatency: number,
+    onChunk: (frame: number, data: Float32Array) => void,
   ) {
+    this.inputLatency = inputLatency;
     this.gate = ctx.createGain();
     this.gate.gain.value = 0; // o worklet precisa de saída conectada para rodar; silenciosa
     src.connect(node);
     node.connect(this.gate).connect(ctx.destination);
     node.port.onmessage = (e: MessageEvent<{ frame: number; data: Float32Array }>) => {
-      if (this.firstFrame === null) this.firstFrame = e.data.frame;
-      this.chunks.push(e.data.data);
+      if (!this.stopped) onChunk(e.data.frame, e.data.data);
     };
   }
 
-  static async create(ctx: AudioContext): Promise<VoiceRecorder> {
+  static async create(ctx: AudioContext, onChunk: (frame: number, data: Float32Array) => void): Promise<VoiceRecorder> {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Este navegador não permite acessar o microfone (é preciso HTTPS ou localhost).');
     let stream: MediaStream;
     try {
@@ -47,23 +47,33 @@ export class VoiceRecorder {
     const src = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, 'recorder-processor', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1 });
     const latency = Number((stream.getAudioTracks()[0]?.getSettings() as MediaTrackSettings & { latency?: number }).latency ?? 0);
-    return new VoiceRecorder(ctx, stream, src, node, latency);
+    return new VoiceRecorder(ctx, stream, src, node, latency, onChunk);
   }
 
-  /** Para a captura e devolve tudo que foi gravado. */
-  stop(): MicTake {
-    this.dispose();
-    const total = this.chunks.reduce((n, c) => n + c.length, 0);
-    const mic = new Float32Array(total);
-    let o = 0;
-    for (const c of this.chunks) {
-      mic.set(c, o);
-      o += c.length;
+  /** Liga/desliga a escuta da própria voz com o efeito. Use fones: nas caixas dá microfonia. */
+  setMonitor(on: boolean, fx: VoiceFx): void {
+    if (this.stopped) return;
+    if (on && !this.chain) {
+      this.chain = createVoiceChain(this.ctx, fx, true);
+      this.monitorGain = this.ctx.createGain();
+      this.monitorGain.gain.value = 1;
+      this.src.connect(this.chain.input);
+      this.chain.output.connect(this.monitorGain).connect(this.ctx.destination);
+    } else if (!on && this.chain) {
+      this.src.disconnect(this.chain.input);
+      this.chain.dispose();
+      this.monitorGain?.disconnect();
+      this.chain = null;
+      this.monitorGain = null;
+    } else if (on && this.chain) {
+      this.chain.apply(fx);
     }
-    return { mic, firstFrame: this.firstFrame ?? 0, inputLatency: this.inputLatency };
   }
 
-  dispose(): void {
+  stop(): void {
+    if (this.stopped) return;
+    this.setMonitor(false, { cleanup: false, compress: 0, brightness: 0, reverb: 0, echo: 0 });
+    this.stopped = true;
     this.src.disconnect();
     this.node.disconnect();
     this.gate.disconnect();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Line } from '../types';
-import { displayState, formatTime, lyricTime, retypeLine, validateLyrics, wordProgress } from './lyrics';
+import { displayState, formatTime, lineJumpTarget, lyricTime, retypeLine, validateLyrics, wordProgress } from './lyrics';
 
 const line = (start: number, end: number, ...texts: string[]): Line => {
   const step = (end - start) / texts.length;
@@ -81,5 +81,24 @@ describe('validateLyrics / formatTime', () => {
   it('formata mm:ss', () => {
     expect(formatTime(65.9)).toBe('1:05');
     expect(formatTime(NaN)).toBe('0:00');
+  });
+});
+
+describe('lineJumpTarget', () => {
+  const ls = [line(10, 14, 'a', 'b'), line(14.5, 18, 'c', 'd'), line(30, 34, 'e', 'f')];
+  it('próxima linha cai antes do início dela', () => {
+    expect(lineJumpTarget(ls, 0, 1)).toBeCloseTo(9.2);
+    expect(lineJumpTarget(ls, 9.2, 1)).toBeCloseTo(13.7); // já está na 1ª: vai para a 2ª
+    expect(lineJumpTarget(ls, 20, 1)).toBeCloseTo(29.2);
+    expect(lineJumpTarget(ls, 31, 1)).toBeNull();
+  });
+  it('anterior volta ao começo da linha atual se está no meio dela, senão à linha de trás', () => {
+    expect(lineJumpTarget(ls, 12.5, -1)).toBeCloseTo(9.2);
+    expect(lineJumpTarget(ls, 9.3, -1)).toBeNull(); // no começo da primeira não há anterior
+    expect(lineJumpTarget(ls, 13.8, -1)).toBeCloseTo(9.2);
+    expect(lineJumpTarget(ls, 29.3, -1)).toBeCloseTo(13.7);
+  });
+  it('sem letra não pula', () => {
+    expect(lineJumpTarget([], 5, 1)).toBeNull();
   });
 });

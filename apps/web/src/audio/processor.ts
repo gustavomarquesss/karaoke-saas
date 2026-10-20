@@ -53,6 +53,8 @@ class KaraokeProcessor extends AudioWorkletProcessor {
         break;
       case 'seek':
         this.engine?.seek(msg.frame);
+        // um salto durante a reprodução recomeça "a contagem" para a gravação (novo trecho)
+        if (this.engine?.playing) this.announce = true;
         break;
     }
   }
